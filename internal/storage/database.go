@@ -367,15 +367,17 @@ func (d *Database) GetTaskStats(taskID string) (*models.TaskStats, error) {
 	`
 
 	var stats models.TaskStats
+	var avgDuration float64
 	err := d.db.QueryRow(query, taskID).Scan(
 		&stats.TotalExecutions,
 		&stats.SuccessCount,
 		&stats.FailureCount,
-		&stats.AverageDurationMs,
+		&avgDuration,
 	)
 	if err != nil {
 		return nil, err
 	}
+	stats.AverageDurationMs = int64(avgDuration)
 
 	// Get last execution status and archive size
 	lastQuery := `

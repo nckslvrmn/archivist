@@ -43,7 +43,14 @@
         <p><strong>Backends:</strong> {{len .Task.BackendIDs}}</p>
     </div>
     <div class="card-footer">
-        <span>{{if .Stats}}{{.Stats.SuccessCount}} successes{{else}}No executions yet{{end}}</span>
+        {{if and .Stats (gt .Stats.TotalExecutions 0)}}
+        <span class="badge badge-success">{{.Stats.SuccessCount}} successes</span>
+        {{if gt .Stats.FailureCount 0}}
+        <span class="badge badge-danger">{{.Stats.FailureCount}} failures</span>
+        {{end}}
+        {{else}}
+        <span>No executions yet</span>
+        {{end}}
     </div>
 </div>
 {{end}}

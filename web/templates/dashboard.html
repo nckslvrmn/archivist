@@ -29,8 +29,7 @@
     <div class="card">
         <div class="card-header">
             <span>{{.TaskName}}</span>
-            <span class="badge badge-{{if eq .Status " success"}}success{{else if eq .Status "failed"
-                }}danger{{else}}info{{end}}">
+            <span class="badge badge-{{if eq .Status "success"}}success{{else if eq .Status "failed"}}danger{{else}}info{{end}}">
                 {{.Status}}
             </span>
         </div>

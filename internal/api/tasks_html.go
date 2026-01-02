@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -14,15 +15,19 @@ func (s *Server) listTasksHTML(w http.ResponseWriter, r *http.Request) {
 	// Enrich with stats
 	type TaskWithStats struct {
 		Task  interface{}
-		Stats interface{}
+		Stats *models.TaskStats
 	}
 
 	var enrichedTasks []TaskWithStats
 	for _, task := range tasks {
 		stats, err := s.db.GetTaskStats(task.ID)
 		if err != nil {
+			log.Printf("Error getting stats for task %s: %v", task.ID, err)
 			// If there's an error getting stats, create an empty stats object
 			stats = &models.TaskStats{}
+		} else {
+			log.Printf("Stats for task %s: Total=%d, Success=%d, Failure=%d",
+				task.ID, stats.TotalExecutions, stats.SuccessCount, stats.FailureCount)
 		}
 		enrichedTasks = append(enrichedTasks, TaskWithStats{
 			Task:  task,

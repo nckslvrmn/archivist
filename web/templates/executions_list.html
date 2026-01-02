@@ -6,8 +6,7 @@
             <div class="card-title">{{.TaskName}}</div>
             <div style="color: #666; font-size: 0.85rem;">{{.StartedAt}}</div>
         </div>
-        <span class="badge badge-{{if eq .Status " success"}}success{{else if eq .Status "failed" }}danger{{else if eq
-            .Status "running" }}info{{else}}disabled{{end}}">
+        <span class="badge badge-{{if eq .Status "success"}}success{{else if eq .Status "failed"}}danger{{else if eq .Status "running"}}info{{else}}disabled{{end}}">
             {{.Status}}
         </span>
     </div>
