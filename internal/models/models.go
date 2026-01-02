@@ -58,8 +58,7 @@ type ArchiveOptions struct {
 
 // SyncOptions represents file-by-file sync options
 type SyncOptions struct {
-	CompareMethod string `json:"compare_method"` // hash, mtime (hash = slower/accurate, mtime = faster/less accurate)
-	DeleteRemote  bool   `json:"delete_remote"`  // If true, delete remote files not in source (true mirror)
+	DeleteRemote bool `json:"delete_remote"` // If true, delete remote files not in source (true mirror)
 }
 
 // RetentionPolicy represents backup retention configuration

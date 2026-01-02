@@ -546,7 +546,10 @@ async function editTask(taskId) {
                 </div>
                 <div class="form-group">
                     <label>Source Path *</label>
-                    <input type="text" name="source_path" value="${task.source_path}" required>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <input type="text" id="edit-source-path" name="source_path" value="${task.source_path}" required style="flex: 1;">
+                        <button type="button" class="btn btn-sm" onclick="showFileBrowser('edit-source-path')" style="white-space: nowrap;">📁 Browse</button>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>Storage Backend(s) *</label>
@@ -608,20 +611,13 @@ async function editTask(taskId) {
                 </div>
                 <div id="sync-options" style="display: ${currentMode === 'sync' ? 'block' : 'none'};">
                     <div class="form-group">
-                        <label>File Comparison Method</label>
-                        <select name="compare_method">
-                            <option value="mtime" ${!task.archive_options.sync_options?.compare_method || task.archive_options.sync_options?.compare_method === 'mtime' ? 'selected' : ''}>Modification Time (Faster)</option>
-                            <option value="hash" ${task.archive_options.sync_options?.compare_method === 'hash' ? 'selected' : ''}>Hash/Checksum (Slower, more accurate)</option>
-                        </select>
-                        <small style="color: #666;">Mtime: Quick, compares file timestamps. Hash: Slower, detects content changes</small>
-                    </div>
-                    <div class="form-group">
                         <label>Delete Remote Files</label>
                         <select name="delete_remote">
                             <option value="false" ${!task.archive_options.sync_options?.delete_remote ? 'selected' : ''}>No (Safer - only add/update files)</option>
                             <option value="true" ${task.archive_options.sync_options?.delete_remote === true ? 'selected' : ''}>Yes (True mirror - delete remote files not in source)</option>
                         </select>
-                        <small style="color: #ff4444;">Warning: True mirror will delete remote files that don't exist locally</small>
+                        <small style="color: #666;">Files are compared by modification time and size</small>
+                        <small style="color: #ff4444; display: block; margin-top: 0.25rem;">Warning: True mirror will delete remote files that don't exist locally</small>
                     </div>
                 </div>
                 <div class="form-group">
@@ -674,7 +670,6 @@ async function handleEditTask(e, taskId) {
             compression: 'none',
             use_timestamp: false,
             sync_options: {
-                compare_method: formData.get('compare_method') || 'mtime',
                 delete_remote: formData.get('delete_remote') === 'true'
             }
         } : {
@@ -682,7 +677,6 @@ async function handleEditTask(e, taskId) {
             compression: 'gzip',
             use_timestamp: formData.get('use_timestamp') === 'true',
             sync_options: {
-                compare_method: 'mtime',
                 delete_remote: false
             }
         },
@@ -753,7 +747,10 @@ async function showCreateTask() {
             </div>
             <div class="form-group">
                 <label>Source Path *</label>
-                <input type="text" name="source_path" placeholder="/data/sources/..." required>
+                <div style="display: flex; gap: 0.5rem;">
+                    <input type="text" id="create-source-path" name="source_path" placeholder="/data/sources/..." required style="flex: 1;">
+                    <button type="button" class="btn btn-sm" onclick="showFileBrowser('create-source-path')" style="white-space: nowrap;">📁 Browse</button>
+                </div>
             </div>
             <div class="form-group">
                 <label>Storage Backend(s) *</label>
@@ -818,20 +815,13 @@ async function showCreateTask() {
             </div>
             <div id="sync-options" style="display: none;">
                 <div class="form-group">
-                    <label>File Comparison Method</label>
-                    <select name="compare_method">
-                        <option value="mtime">Modification Time (Faster)</option>
-                        <option value="hash">Hash/Checksum (Slower, more accurate)</option>
-                    </select>
-                    <small style="color: #666;">Mtime: Quick, compares file timestamps. Hash: Slower, detects content changes</small>
-                </div>
-                <div class="form-group">
                     <label>Delete Remote Files</label>
                     <select name="delete_remote">
                         <option value="false">No (Safer - only add/update files)</option>
                         <option value="true">Yes (True mirror - delete remote files not in source)</option>
                     </select>
-                    <small style="color: #ff4444;">Warning: True mirror will delete remote files that don't exist locally</small>
+                    <small style="color: #666;">Files are compared by modification time and size</small>
+                    <small style="color: #ff4444; display: block; margin-top: 0.25rem;">Warning: True mirror will delete remote files that don't exist locally</small>
                 </div>
             </div>
             <div class="form-group">
@@ -878,6 +868,137 @@ function updateBackupModeFields(mode) {
     }
 }
 
+// File Browser functionality
+let currentBrowsePath = '';
+let selectedSourcePath = '';
+
+async function showFileBrowser(inputId) {
+    const input = document.getElementById(inputId);
+    selectedSourcePath = input.value;
+
+    // Create modal content for file browser
+    const modalBody = document.getElementById('modal-body');
+    modalBody.innerHTML = `
+        <h2>Browse Source Directories</h2>
+        <div id="file-browser" style="min-height: 400px;">
+            <div id="browser-path" style="margin-bottom: 1rem; padding: 0.75rem; background: #2a2a2a; border-radius: 4px; font-family: monospace; font-size: 0.9rem;">
+                <strong>Path:</strong> /data/sources/<span id="current-path"></span>
+            </div>
+            <div id="browser-controls" style="margin-bottom: 1rem; display: flex; gap: 0.5rem;">
+                <button class="btn btn-sm" onclick="navigateUp()" id="up-button" disabled>
+                    ⬆️ Up
+                </button>
+                <button class="btn btn-sm btn-primary" onclick="selectCurrentPath()">
+                    ✓ Select Current Directory
+                </button>
+            </div>
+            <div id="browser-list" style="max-height: 400px; overflow-y: auto; border: 1px solid #333; border-radius: 4px;">
+                <p style="padding: 1rem; text-align: center;">Loading...</p>
+            </div>
+        </div>
+        <div class="form-actions" style="margin-top: 1rem;">
+            <button type="button" class="btn" onclick="closeModal()">Cancel</button>
+        </div>
+    `;
+
+    showModal();
+    await loadDirectoryContents('');
+}
+
+async function loadDirectoryContents(path) {
+    currentBrowsePath = path;
+    const browserList = document.getElementById('browser-list');
+    const currentPathDisplay = document.getElementById('current-path');
+    const upButton = document.getElementById('up-button');
+
+    // Update path display
+    currentPathDisplay.textContent = path || '(root)';
+
+    // Enable/disable up button
+    upButton.disabled = !path;
+
+    try {
+        const url = path ? `${API_BASE}/sources?path=${encodeURIComponent(path)}` : `${API_BASE}/sources`;
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (!data.success) {
+            browserList.innerHTML = '<p style="padding: 1rem; color: #ff4444;">Failed to load directory</p>';
+            return;
+        }
+
+        const entries = data.data.entries || [];
+
+        if (entries.length === 0) {
+            browserList.innerHTML = '<p style="padding: 1rem; color: #888;">Empty directory</p>';
+            return;
+        }
+
+        // Sort: directories first, then files
+        const sorted = entries.sort((a, b) => {
+            if (a.type === 'directory' && b.type !== 'directory') return -1;
+            if (a.type !== 'directory' && b.type === 'directory') return 1;
+            return a.name.localeCompare(b.name);
+        });
+
+        browserList.innerHTML = sorted.map(entry => {
+            const isDir = entry.type === 'directory';
+            const icon = isDir ? '📁' : '📄';
+            const sizeInfo = isDir ? `${entry.file_count || 0} files` : formatBytes(entry.size);
+            const clickable = isDir ? `onclick="navigateInto('${entry.name}')"` : '';
+            const cursor = isDir ? 'cursor: pointer;' : '';
+
+            return `
+                <div class="browser-entry" ${clickable} style="padding: 0.75rem; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; ${cursor}" ${isDir ? 'onmouseover="this.style.background=\'#2a2a2a\'" onmouseout="this.style.background=\'\'"' : ''}>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1;">
+                        <span style="font-size: 1.2rem;">${icon}</span>
+                        <span style="font-weight: ${isDir ? 'bold' : 'normal'};">${entry.name}</span>
+                    </div>
+                    <div style="color: #888; font-size: 0.85rem;">
+                        ${sizeInfo}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+    } catch (error) {
+        browserList.innerHTML = '<p style="padding: 1rem; color: #ff4444;">Error loading directory</p>';
+        console.error('Failed to load directory:', error);
+    }
+}
+
+function navigateInto(dirName) {
+    const newPath = currentBrowsePath ? `${currentBrowsePath}/${dirName}` : dirName;
+    loadDirectoryContents(newPath);
+}
+
+function navigateUp() {
+    if (!currentBrowsePath) return;
+
+    const parts = currentBrowsePath.split('/');
+    parts.pop();
+    const newPath = parts.join('/');
+    loadDirectoryContents(newPath);
+}
+
+function selectCurrentPath() {
+    // Get the base sources directory path
+    const settings = { sources_dir: '/data/sources' }; // This should match your config
+    const fullPath = currentBrowsePath
+        ? `${settings.sources_dir}/${currentBrowsePath}`
+        : settings.sources_dir;
+
+    // Find the input that triggered the browser
+    const sourcePathInput = document.querySelector('input[name="source_path"]');
+    if (sourcePathInput) {
+        sourcePathInput.value = fullPath;
+        selectedSourcePath = fullPath;
+    }
+
+    closeModal();
+    showToast('Source path selected: ' + fullPath, 'success');
+}
+
 async function handleCreateTask(e) {
     e.preventDefault();
     const form = e.target;
@@ -908,7 +1029,6 @@ async function handleCreateTask(e) {
             compression: 'none',
             use_timestamp: false,
             sync_options: {
-                compare_method: formData.get('compare_method') || 'mtime',
                 delete_remote: formData.get('delete_remote') === 'true'
             }
         } : {
@@ -916,7 +1036,6 @@ async function handleCreateTask(e) {
             compression: 'gzip',
             use_timestamp: formData.get('use_timestamp') === 'true',
             sync_options: {
-                compare_method: 'mtime',
                 delete_remote: false
             }
         },

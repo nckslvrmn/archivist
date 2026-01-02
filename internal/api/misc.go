@@ -10,33 +10,60 @@ import (
 )
 
 // listSources handles GET /api/v1/sources
+// Query params: ?path=/relative/path - to browse subdirectories
 func (s *Server) listSources(w http.ResponseWriter, r *http.Request) {
 	settings := s.config.GetSettings()
 	sourcesDir := s.config.ResolvePath(settings.SourcesDir)
 
-	// Check if sources directory exists
-	if _, err := os.Stat(sourcesDir); os.IsNotExist(err) {
-		s.success(w, []models.SourceInfo{})
+	// Get optional path parameter for browsing subdirectories
+	subPath := r.URL.Query().Get("path")
+
+	// Build the target directory path
+	var targetDir string
+	if subPath != "" {
+		// Security: ensure the path doesn't escape the sources directory
+		cleanPath := filepath.Clean(subPath)
+		if filepath.IsAbs(cleanPath) || filepath.HasPrefix(cleanPath, "..") {
+			s.error(w, "VALIDATION_ERROR", "Invalid path", http.StatusBadRequest)
+			return
+		}
+		targetDir = filepath.Join(sourcesDir, cleanPath)
+	} else {
+		targetDir = sourcesDir
+	}
+
+	// Check if target directory exists
+	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
+		s.success(w, map[string]interface{}{
+			"path":    subPath,
+			"entries": []models.SourceInfo{},
+		})
 		return
 	}
 
 	// Read directory
-	entries, err := os.ReadDir(sourcesDir)
+	entries, err := os.ReadDir(targetDir)
 	if err != nil {
-		s.error(w, "INTERNAL_ERROR", "Failed to read sources directory", http.StatusInternalServerError)
+		s.error(w, "INTERNAL_ERROR", "Failed to read directory", http.StatusInternalServerError)
 		return
 	}
 
 	var sources []models.SourceInfo
 	for _, entry := range entries {
-		fullPath := filepath.Join(sourcesDir, entry.Name())
+		fullPath := filepath.Join(targetDir, entry.Name())
 		info, err := os.Stat(fullPath)
 		if err != nil {
 			continue
 		}
 
+		// Build relative path from sources directory
+		relPath, err := filepath.Rel(sourcesDir, fullPath)
+		if err != nil {
+			relPath = entry.Name()
+		}
+
 		source := models.SourceInfo{
-			Path:       fullPath,
+			Path:       filepath.Join(sourcesDir, relPath), // Full absolute path
 			Name:       entry.Name(),
 			Accessible: true,
 		}
@@ -54,6 +81,9 @@ func (s *Server) listSources(w http.ResponseWriter, r *http.Request) {
 			}
 		} else if info.IsDir() {
 			source.Type = "directory"
+		} else {
+			source.Type = "file"
+			source.Size = info.Size()
 		}
 
 		// Calculate size (simplified - just immediate files)
@@ -66,7 +96,10 @@ func (s *Server) listSources(w http.ResponseWriter, r *http.Request) {
 		sources = append(sources, source)
 	}
 
-	s.success(w, sources)
+	s.success(w, map[string]interface{}{
+		"path":    subPath,
+		"entries": sources,
+	})
 }
 
 // getConfig handles GET /api/v1/config

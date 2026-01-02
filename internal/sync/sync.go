@@ -2,10 +2,7 @@ package sync
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
-	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -228,12 +225,6 @@ func (s *Syncer) DryRun(ctx context.Context) (*models.SyncDetails, error) {
 
 // getUploadReason explains why a file would be uploaded
 func (s *Syncer) getUploadReason(local FileInfo, remote backend.BackupInfo) string {
-	if s.Options.CompareMethod == "hash" {
-		if local.Hash != "" && remote.Hash != "" && local.Hash != remote.Hash {
-			return "Hash mismatch"
-		}
-	}
-
 	if local.Size != remote.Size {
 		return "Size changed"
 	}
@@ -268,15 +259,6 @@ func (s *Syncer) scanLocalFiles() ([]FileInfo, error) {
 			ModTime:      info.ModTime(),
 		}
 
-		// Compute hash if using hash comparison
-		if s.Options.CompareMethod == "hash" {
-			hash, err := computeFileHash(path)
-			if err != nil {
-				return fmt.Errorf("failed to compute hash for %s: %w", path, err)
-			}
-			fileInfo.Hash = hash
-		}
-
 		files = append(files, fileInfo)
 		return nil
 	})
@@ -289,57 +271,22 @@ func (s *Syncer) listRemoteFiles(ctx context.Context) ([]backend.BackupInfo, err
 	return s.Backend.List(ctx, s.RemotePath)
 }
 
-// needsUpload determines if a file needs to be uploaded based on comparison method
+// needsUpload determines if a file needs to be uploaded based on size and modification time
 func (s *Syncer) needsUpload(local FileInfo, remote backend.BackupInfo) bool {
-	switch s.Options.CompareMethod {
-	case "hash":
-		// Compare hashes
-		if local.Hash != "" && remote.Hash != "" {
-			return local.Hash != remote.Hash
-		}
-		// Fallback to size if hash not available
-		return local.Size != remote.Size
-
-	case "mtime":
-		// Compare modification time and size
-		if local.Size != remote.Size {
-			return true
-		}
-
-		// Parse remote modification time
-		remoteModTime, err := time.Parse(time.RFC3339, remote.LastModified)
-		if err != nil {
-			// If we can't parse time, compare sizes only
-			return false
-		}
-
-		// Upload if local is newer (with 1 second tolerance for filesystem differences)
-		return local.ModTime.After(remoteModTime.Add(time.Second))
-
-	default:
-		// Default to mtime comparison
-		return s.needsUpload(local, remote)
+	// Compare size first (fast check)
+	if local.Size != remote.Size {
+		return true
 	}
-}
 
-// computeFileHash computes SHA256 hash of a file
-func computeFileHash(path string) (string, error) {
-	file, err := os.Open(path)
+	// Parse remote modification time
+	remoteModTime, err := time.Parse(time.RFC3339, remote.LastModified)
 	if err != nil {
-		return "", err
-	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			log.Printf("Error closing file: %v", err)
-		}
-	}()
-
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
+		// If we can't parse time, assume unchanged since size matches
+		return false
 	}
 
-	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+	// Upload if local is newer (with 1 second tolerance for filesystem differences)
+	return local.ModTime.After(remoteModTime.Add(time.Second))
 }
 
 // reportProgress reports sync progress
