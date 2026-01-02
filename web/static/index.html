@@ -13,7 +13,7 @@
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
     <!-- Alpine.js for reactive UI components -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.15.0/cdn.js"
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.15.0/cdn.js"
         integrity="sha512-nHfCQtLDRfNgzsuMx2O2Joo3+xM8antMOBxo9GodZry1h33+lWa2Dd3a/lkVY4fHJK1CAkFcUrz2jilsaZFWeQ=="
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
@@ -55,7 +55,11 @@
 
             <!-- Tasks View -->
             <div x-show="currentView === 'tasks'"
-                x-data="{ showCreateModal: false, showEditModal: false, showDryRunModal: false, editTaskId: '', dryRunData: null }">
+                x-data="{ showCreateModal: false, showEditModal: false, showDryRunModal: false, editTaskId: '', dryRunData: null }"
+                @open-task-edit-modal.window="showEditModal = true"
+                @open-task-dry-run-modal.window="showDryRunModal = true"
+                @close-task-edit-modal.window="showEditModal = false"
+                @close-task-dry-run-modal.window="showDryRunModal = false">
                 <div class="view-header">
                     <h2>Backup Tasks</h2>
                     <button class="btn btn-primary" @click="showCreateModal = true;
@@ -100,7 +104,9 @@
 
             <!-- Backends View -->
             <div x-show="currentView === 'backends'"
-                x-data="{ showCreateModal: false, showEditModal: false, editBackendId: '' }">
+                x-data="{ showCreateModal: false, showEditModal: false, editBackendId: '' }"
+                @open-backend-edit-modal.window="showEditModal = true"
+                @close-backend-edit-modal.window="showEditModal = false">
                 <div class="view-header">
                     <h2>Storage Backends</h2>
                     <button class="btn btn-primary" @click="showCreateModal = true;

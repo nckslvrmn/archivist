@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/nsilverman/archivist/internal/models"
 )
 
 // listTasksHTML handles GET /api/v1/tasks/html
@@ -18,7 +19,11 @@ func (s *Server) listTasksHTML(w http.ResponseWriter, r *http.Request) {
 
 	var enrichedTasks []TaskWithStats
 	for _, task := range tasks {
-		stats, _ := s.db.GetTaskStats(task.ID)
+		stats, err := s.db.GetTaskStats(task.ID)
+		if err != nil {
+			// If there's an error getting stats, create an empty stats object
+			stats = &models.TaskStats{}
+		}
 		enrichedTasks = append(enrichedTasks, TaskWithStats{
 			Task:  task,
 			Stats: stats,

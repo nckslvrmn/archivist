@@ -1,24 +1,23 @@
 {{if .}}
-    {{range .}}
-    <div class="card">
-        <div class="card-header">
-            <div>
-                <div class="card-title">{{.TaskName}}</div>
-                <div style="color: #666; font-size: 0.85rem;">{{.StartedAt}}</div>
-            </div>
-            <span class="badge badge-{{if eq .Status "completed"}}success{{else if eq .Status "failed"}}danger{{else if eq .Status "running"}}info{{else}}disabled{{end}}">
-                {{.Status}}
-            </span>
+{{range .}}
+<div class="card">
+    <div class="card-header">
+        <div>
+            <div class="card-title">{{.TaskName}}</div>
+            <div style="color: #666; font-size: 0.85rem;">{{.StartedAt}}</div>
         </div>
-        <div class="card-body">
-            {{if .Error}}
-            <p style="color: #ff6b6b;">Error: {{.Error}}</p>
-            {{else if .Summary}}
-            <p>{{.Summary}}</p>
-            {{end}}
-        </div>
+        <span class="badge badge-{{if eq .Status " success"}}success{{else if eq .Status "failed" }}danger{{else if eq
+            .Status "running" }}info{{else}}disabled{{end}}">
+            {{.Status}}
+        </span>
     </div>
-    {{end}}
+    <div class="card-body">
+        {{if .ErrorMessage}}
+        <p style="color: #ff6b6b;">Error: {{.ErrorMessage}}</p>
+        {{end}}
+    </div>
+</div>
+{{end}}
 {{else}}
 <p class="empty-state">No execution history</p>
 {{end}}

@@ -46,6 +46,12 @@ func (s *Server) dashboardHTML(w http.ResponseWriter, r *http.Request) {
 		recentExecutions = nil
 	}
 
+	// Calculate success rate
+	var successRate float64
+	if executionStats.Total > 0 {
+		successRate = float64(executionStats.Success) * 100.0 / float64(executionStats.Total)
+	}
+
 	data := map[string]interface{}{
 		"TotalTasks":       len(tasks),
 		"EnabledTasks":     enabledTasks,
@@ -53,6 +59,7 @@ func (s *Server) dashboardHTML(w http.ResponseWriter, r *http.Request) {
 		"EnabledBackends":  enabledBackends,
 		"ExecutionStats":   executionStats,
 		"RecentExecutions": recentExecutions,
+		"SuccessRate":      successRate,
 	}
 
 	s.htmlResponse(w, "dashboard.html", data)

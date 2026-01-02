@@ -1,8 +1,7 @@
 <h2>Create New Backend</h2>
-<form hx-post="/api/v1/backends"
-      hx-swap="none"
-      hx-on::after-request="if(event.detail.successful) { $root.showCreateModal = false; htmx.trigger('body', 'backendUpdated'); showToast('Backend created successfully', 'success'); } else { showToast('Failed to create backend', 'error'); }"
-      x-data="{ type: 'local' }">
+<form hx-post="/api/v1/backends" hx-swap="none"
+    hx-on::after-request="if(event.detail.successful) { $root.showCreateModal = false; htmx.trigger('body', 'backendUpdated'); showToast('Backend created successfully', 'success'); } else { showToast('Failed to create backend', 'error'); }"
+    x-data="{ type: 'local' }">
 
     <div class="form-group">
         <label>Backend Name *</label>

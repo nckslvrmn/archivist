@@ -222,10 +222,22 @@ nav {
     border: 1px solid #00ff8844;
 }
 
+.badge-danger {
+    background: #ff444422;
+    color: #ff4444;
+    border: 1px solid #ff444444;
+}
+
 .badge-error {
     background: #ff444422;
     color: #ff4444;
     border: 1px solid #ff444444;
+}
+
+.badge-info {
+    background: #4499ff22;
+    color: #4499ff;
+    border: 1px solid #4499ff44;
 }
 
 .badge-running {
