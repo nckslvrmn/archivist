@@ -1,0 +1,62 @@
+<h2>Create New Backend</h2>
+<form hx-post="/api/v1/backends"
+      hx-swap="none"
+      hx-on::after-request="if(event.detail.successful) { $root.showCreateModal = false; htmx.trigger('body', 'backendUpdated'); showToast('Backend created successfully', 'success'); } else { showToast('Failed to create backend', 'error'); }"
+      x-data="{ type: 'local' }">
+
+    <div class="form-group">
+        <label>Backend Name *</label>
+        <input type="text" name="name" required>
+    </div>
+
+    <div class="form-group">
+        <label>Backend Type *</label>
+        <select name="type" x-model="type">
+            <option value="local">Local Filesystem</option>
+            <option value="s3">AWS S3 / S3-Compatible</option>
+            <option value="gcs">Google Cloud Storage</option>
+            <option value="gdrive">Google Drive</option>
+            <option value="azure">Azure Blob Storage</option>
+            <option value="b2">Backblaze B2</option>
+        </select>
+    </div>
+
+    <div x-show="type === 'local'">
+        <div class="form-group">
+            <label>Local Path *</label>
+            <input type="text" name="config_path" placeholder="/backup/destination">
+        </div>
+    </div>
+
+    <div x-show="type === 's3'" style="display: none;">
+        <div class="form-group">
+            <label>Bucket Name *</label>
+            <input type="text" name="config_bucket">
+        </div>
+        <div class="form-group">
+            <label>Region *</label>
+            <input type="text" name="config_region" placeholder="us-east-1">
+        </div>
+        <div class="form-group">
+            <label>Access Key ID</label>
+            <input type="text" name="config_access_key_id">
+        </div>
+        <div class="form-group">
+            <label>Secret Access Key</label>
+            <input type="password" name="config_secret_access_key">
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label>Initial Status</label>
+        <select name="enabled">
+            <option value="true">Enabled</option>
+            <option value="false">Disabled</option>
+        </select>
+    </div>
+
+    <div class="form-actions">
+        <button type="button" class="btn" @click="$root.showCreateModal = false">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create Backend</button>
+    </div>
+</form>

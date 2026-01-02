@@ -424,9 +424,9 @@ func (d *Database) GetExecutionStats() (*models.ExecutionsStats, error) {
 	query := `
 		SELECT
 			COUNT(*) as total,
-			SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success,
-			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
-			SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running
+			COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success,
+			COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed,
+			COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) as running
 		FROM executions
 	`
 

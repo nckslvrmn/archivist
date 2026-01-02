@@ -1,0 +1,52 @@
+<h2>Dashboard</h2>
+<div class="stats-grid">
+    <div class="stat-card">
+        <h3>Tasks</h3>
+        <p class="stat-value">{{.TotalTasks}}</p>
+        <p class="stat-label">Total Tasks</p>
+    </div>
+    <div class="stat-card">
+        <h3>Backends</h3>
+        <p class="stat-value">{{.TotalBackends}}</p>
+        <p class="stat-label">Configured</p>
+    </div>
+    <div class="stat-card">
+        <h3>Executions</h3>
+        <p class="stat-value">{{.ExecutionStats.Total}}</p>
+        <p class="stat-label">Total</p>
+    </div>
+    <div class="stat-card">
+        <h3>Success Rate</h3>
+        <p class="stat-value">{{if .ExecutionStats.Total}}{{printf "%.0f" .ExecutionStats.SuccessRate}}%{{else}}-{{end}}</p>
+        <p class="stat-label">All Time</p>
+    </div>
+</div>
+
+<h3>Recent Activity</h3>
+<div class="activity-list">
+    {{if .RecentExecutions}}
+        {{range .RecentExecutions}}
+        <div class="card">
+            <div class="card-header">
+                <span>{{.TaskName}}</span>
+                <span class="badge badge-{{if eq .Status "completed"}}success{{else if eq .Status "failed"}}danger{{else}}info{{end}}">
+                    {{.Status}}
+                </span>
+            </div>
+            <div class="card-footer">
+                <span>{{.StartedAt}}</span>
+                {{if .Duration}}
+                <span>{{.Duration}}</span>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+    {{else}}
+    <p class="empty-state">No recent activity</p>
+    {{end}}
+</div>
+
+<h3>Running Tasks</h3>
+<div class="task-list">
+    <p class="empty-state">No tasks currently running</p>
+</div>

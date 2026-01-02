@@ -1,62 +1,95 @@
-// Main application entry point
-import { initWebSocket } from './websocket.js';
-import { initModal, closeModal } from './modal.js';
-import { initDashboard, handleProgressEvent, loadDashboard } from './dashboard.js';
-import { initTasks, loadTasks } from './tasks.js';
-import { initBackends, loadBackends } from './backends.js';
-import { initHistory, loadHistory } from './history.js';
+// Simplified app.js for htmx + Alpine.js
+// Only handles toasts and WebSocket progress updates
 
-// Make closeModal available globally for onclick handlers
-window.closeModal = closeModal;
+// Toast notification function
+window.showToast = function(message, type = 'info', duration = 4000) {
+    const container = document.getElementById('toast-container');
+    const template = document.getElementById('toast-template');
+    const toast = template.content.cloneNode(true);
 
-// Navigation
-function initNavigation() {
-    document.querySelectorAll('.nav-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const view = btn.dataset.view;
-            switchView(view);
-        });
-    });
-}
+    const icons = {
+        success: '✓',
+        error: '✕',
+        warning: '⚠',
+        info: 'ℹ'
+    };
 
-function switchView(viewName) {
-    // Update nav buttons
-    document.querySelectorAll('.nav-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.view === viewName);
-    });
+    const titles = {
+        success: 'Success',
+        error: 'Error',
+        warning: 'Warning',
+        info: 'Info'
+    };
 
-    // Update views
-    document.querySelectorAll('.view').forEach(view => {
-        view.classList.toggle('active', view.id === `${viewName}-view`);
-    });
+    const toastElement = toast.querySelector('.toast');
+    toastElement.className = `toast ${type}`;
 
-    // Reload data for the view
-    switch (viewName) {
-        case 'dashboard':
-            loadDashboard();
-            break;
-        case 'tasks':
-            loadTasks();
-            break;
-        case 'backends':
-            loadBackends();
-            break;
-        case 'history':
-            loadHistory();
-            break;
+    toast.querySelector('[data-field="icon"]').textContent = icons[type] || icons.info;
+    toast.querySelector('[data-field="title"]').textContent = titles[type];
+    toast.querySelector('[data-field="message"]').textContent = message;
+
+    container.appendChild(toast);
+
+    if (duration > 0) {
+        setTimeout(() => {
+            toastElement.classList.add('hiding');
+            setTimeout(() => toastElement.remove(), 300);
+        }, duration);
     }
+};
+
+window.closeToast = function(button) {
+    const toast = button.parentElement;
+    toast.classList.add('hiding');
+    setTimeout(() => toast.remove(), 300);
+};
+
+// htmx event listeners for global error handling and success messages
+document.body.addEventListener('htmx:responseError', (event) => {
+    showToast('Request failed: ' + event.detail.error, 'error');
+});
+
+document.body.addEventListener('htmx:afterRequest', (event) => {
+    const xhr = event.detail.xhr;
+    if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+            const response = JSON.parse(xhr.responseText);
+            if (response.success && response.message) {
+                showToast(response.message, 'success');
+            }
+        } catch (e) {
+            // Not JSON, that's okay
+        }
+    }
+});
+
+// WebSocket for progress updates (if needed)
+const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const wsUrl = `${protocol}//${window.location.host}/api/v1/ws/progress`;
+let ws = null;
+
+function initWebSocket() {
+    ws = new WebSocket(wsUrl);
+
+    ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        // Handle progress updates
+        // Could dispatch custom event for Alpine.js to pick up
+        document.dispatchEvent(new CustomEvent('progress-update', { detail: data }));
+    };
+
+    ws.onclose = () => {
+        console.log('WebSocket closed, reconnecting...');
+        setTimeout(initWebSocket, 3000);
+    };
+
+    ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+    };
 }
 
-// Initialize app on DOM ready
+// Initialize WebSocket on page load
 document.addEventListener('DOMContentLoaded', () => {
-    // Initialize core features
-    initModal();
-    initNavigation();
-    initWebSocket(handleProgressEvent);
-
-    // Initialize feature modules
-    initDashboard();
-    initTasks();
-    initBackends();
-    initHistory();
+    initWebSocket();
+    console.log('Archivist initialized with htmx + Alpine.js');
 });

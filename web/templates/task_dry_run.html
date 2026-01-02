@@ -1,0 +1,14 @@
+<h2>Dry Run Results - {{.TaskName}}</h2>
+<p>Dry run results for task: {{.TaskName}}</p>
+<p>Mode: {{.Mode}}</p>
+<p>Files found: {{.FilesSummary.TotalFiles}}</p>
+<p>Total size: {{.FilesSummary.TotalSize}} bytes</p>
+
+<h3>Backends Status</h3>
+{{range .BackendPlans}}
+<div>
+    <strong>{{.BackendName}}</strong> ({{.BackendType}}):
+    {{if .Available}}✅ Available{{else}}❌ Not available{{end}}
+    {{if .ErrorMessage}}<br>Error: {{.ErrorMessage}}{{end}}
+</div>
+{{end}}

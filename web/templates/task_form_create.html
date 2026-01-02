@@ -1,0 +1,110 @@
+<h2>Create New Task</h2>
+<form hx-post="/api/v1/tasks"
+      hx-swap="none"
+      hx-on::after-request="if(event.detail.successful) { $root.showCreateModal = false; htmx.trigger('body', 'taskUpdated'); showToast('Task created successfully', 'success'); } else { showToast('Failed to create task', 'error'); }"
+      x-data="{
+          scheduleType: 'simple',
+          backupMode: 'archive',
+          useTimestamp: 'true'
+      }">
+
+    <div class="form-group">
+        <label>Task Name *</label>
+        <input type="text" name="name" required>
+    </div>
+
+    <div class="form-group">
+        <label>Description</label>
+        <textarea name="description" rows="3"></textarea>
+    </div>
+
+    <div class="form-group">
+        <label>Source Path *</label>
+        <input type="text" name="source_path" placeholder="/data/sources/..." required>
+    </div>
+
+    <div class="form-group">
+        <label>Storage Backend(s) *</label>
+        <div class="backend-selector">
+            {{range .Backends}}
+            <label class="backend-option">
+                <input type="checkbox" name="backend_ids" value="{{.ID}}" required>
+                <span class="backend-option-content">
+                    <span class="backend-option-name">{{.Name}}</span>
+                    <span class="backend-option-type">{{.Type}}</span>
+                </span>
+            </label>
+            {{end}}
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label>Schedule Type *</label>
+        <select name="schedule_type" x-model="scheduleType">
+            <option value="simple">Simple</option>
+            <option value="cron">Cron</option>
+            <option value="manual">Manual</option>
+        </select>
+    </div>
+
+    <div class="form-group" x-show="scheduleType === 'simple'">
+        <label>Frequency</label>
+        <select name="simple_type">
+            <option value="hourly">Hourly</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+        </select>
+    </div>
+
+    <div class="form-group" x-show="scheduleType === 'cron'" style="display: none;">
+        <label>Cron Expression</label>
+        <input type="text" name="cron_expr" placeholder="0 2 * * *">
+    </div>
+
+    <div class="form-group">
+        <label>Backup Mode *</label>
+        <select name="backup_mode" x-model="backupMode">
+            <option value="archive">Archive (Compressed)</option>
+            <option value="sync">Sync (File-by-file)</option>
+        </select>
+    </div>
+
+    <div x-show="backupMode === 'archive'">
+        <div class="form-group">
+            <label>Use Timestamp in Filename</label>
+            <select name="use_timestamp" x-model="useTimestamp">
+                <option value="true">Yes (Point-in-time backups)</option>
+                <option value="false">No (Mirror/overwrite)</option>
+            </select>
+        </div>
+
+        <div class="form-group" x-show="useTimestamp === 'true'">
+            <label>Retention (Keep Last N Backups, 0 = unlimited)</label>
+            <input type="number" name="keep_last" value="7">
+        </div>
+    </div>
+
+    <div x-show="backupMode === 'sync'" style="display: none;">
+        <div class="form-group">
+            <label>Delete Remote Files</label>
+            <select name="delete_remote">
+                <option value="false">No (Safer)</option>
+                <option value="true">Yes (True mirror)</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label>Initial Status</label>
+        <select name="enabled">
+            <option value="false">Disabled (Safer)</option>
+            <option value="true">Enabled</option>
+        </select>
+    </div>
+
+    <div class="form-actions">
+        <button type="button" class="btn" @click="$root.showCreateModal = false">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create Task</button>
+    </div>
+</form>

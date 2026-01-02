@@ -6,9 +6,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Archivist - Backup Manager</title>
     <link rel="stylesheet" href="/css/style.css">
+
+    <!-- htmx for AJAX interactions -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/htmx/2.0.7/htmx.min.js"
+        integrity="sha512-IisGoumHahmfNIhP4wUV3OhgQZaaDBuD6IG4XlyjT77IUkwreZL3T3afO4xXuDanSalZ57Un+UlAbarQjNZCTQ=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+    <!-- Alpine.js for reactive UI components -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.15.0/cdn.js"
+        integrity="sha512-nHfCQtLDRfNgzsuMx2O2Joo3+xM8antMOBxo9GodZry1h33+lWa2Dd3a/lkVY4fHJK1CAkFcUrz2jilsaZFWeQ=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
 
-<body>
+<body x-data="{
+    currentView: 'dashboard',
+    showModal: false,
+    modalContent: ''
+}">
     <div class="container">
         <header>
             <h1>Archivist</h1>
@@ -16,191 +30,134 @@
         </header>
 
         <nav>
-            <button class="nav-btn active" data-view="dashboard">Dashboard</button>
-            <button class="nav-btn" data-view="tasks">Tasks</button>
-            <button class="nav-btn" data-view="backends">Backends</button>
-            <button class="nav-btn" data-view="history">History</button>
+            <button class="nav-btn" :class="{ 'active': currentView === 'dashboard' }"
+                @click="currentView = 'dashboard'">
+                Dashboard
+            </button>
+            <button class="nav-btn" :class="{ 'active': currentView === 'tasks' }" @click="currentView = 'tasks'">
+                Tasks
+            </button>
+            <button class="nav-btn" :class="{ 'active': currentView === 'backends' }" @click="currentView = 'backends'">
+                Backends
+            </button>
+            <button class="nav-btn" :class="{ 'active': currentView === 'history' }" @click="currentView = 'history'">
+                History
+            </button>
         </nav>
 
         <main>
             <!-- Dashboard View -->
-            <div id="dashboard-view" class="view active">
+            <div x-show="currentView === 'dashboard'" hx-get="/api/v1/dashboard/html" hx-trigger="revealed"
+                hx-swap="innerHTML">
                 <h2>Dashboard</h2>
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <h3>Tasks</h3>
-                        <p class="stat-value" id="stat-tasks">-</p>
-                        <p class="stat-label">Total Tasks</p>
-                    </div>
-                    <div class="stat-card">
-                        <h3>Backends</h3>
-                        <p class="stat-value" id="stat-backends">-</p>
-                        <p class="stat-label">Configured</p>
-                    </div>
-                    <div class="stat-card">
-                        <h3>Executions</h3>
-                        <p class="stat-value" id="stat-executions">-</p>
-                        <p class="stat-label">Total</p>
-                    </div>
-                    <div class="stat-card">
-                        <h3>Success Rate</h3>
-                        <p class="stat-value" id="stat-success-rate">-</p>
-                        <p class="stat-label">All Time</p>
-                    </div>
-                </div>
-
-                <h3>Recent Activity</h3>
-                <div id="recent-activity" class="activity-list">
-                    <p class="empty-state">No recent activity</p>
-                </div>
-
-                <h3>Running Tasks</h3>
-                <div id="running-tasks" class="task-list">
-                    <p class="empty-state">No tasks currently running</p>
-                </div>
+                <p class="empty-state">Loading dashboard...</p>
             </div>
 
             <!-- Tasks View -->
-            <div id="tasks-view" class="view">
+            <div x-show="currentView === 'tasks'"
+                x-data="{ showCreateModal: false, showEditModal: false, showDryRunModal: false, editTaskId: '', dryRunData: null }">
                 <div class="view-header">
                     <h2>Backup Tasks</h2>
-                    <button class="btn btn-primary" onclick="showCreateTask()">+ New Task</button>
+                    <button class="btn btn-primary" @click="showCreateModal = true;
+                        $nextTick(() => htmx.trigger('#create-task-modal', 'loadForm'))">
+                        + New Task
+                    </button>
                 </div>
-                <div id="tasks-list" class="task-list">
+
+                <!-- Tasks List -->
+                <div hx-get="/api/v1/tasks/html" hx-trigger="revealed, taskUpdated from:body" hx-swap="innerHTML">
                     <p class="empty-state">Loading tasks...</p>
+                </div>
+
+                <!-- Create Task Modal -->
+                <div x-show="showCreateModal" @click.self="showCreateModal = false" class="modal"
+                    :class="{ 'active': showCreateModal }">
+                    <div class="modal-content">
+                        <span class="close" @click="showCreateModal = false">&times;</span>
+                        <div id="create-task-modal" hx-get="/api/v1/tasks/form/create" hx-trigger="loadForm"
+                            hx-swap="innerHTML"></div>
+                    </div>
+                </div>
+
+                <!-- Edit Task Modal -->
+                <div x-show="showEditModal" @click.self="showEditModal = false" class="modal"
+                    :class="{ 'active': showEditModal }">
+                    <div class="modal-content">
+                        <span class="close" @click="showEditModal = false">&times;</span>
+                        <div id="edit-task-modal"></div>
+                    </div>
+                </div>
+
+                <!-- Dry Run Results Modal -->
+                <div x-show="showDryRunModal" @click.self="showDryRunModal = false" class="modal"
+                    :class="{ 'active': showDryRunModal }">
+                    <div class="modal-content">
+                        <span class="close" @click="showDryRunModal = false">&times;</span>
+                        <div id="dry-run-modal"></div>
+                    </div>
                 </div>
             </div>
 
             <!-- Backends View -->
-            <div id="backends-view" class="view">
+            <div x-show="currentView === 'backends'"
+                x-data="{ showCreateModal: false, showEditModal: false, editBackendId: '' }">
                 <div class="view-header">
                     <h2>Storage Backends</h2>
-                    <button class="btn btn-primary" onclick="showCreateBackend()">+ New Backend</button>
+                    <button class="btn btn-primary" @click="showCreateModal = true;
+                        $nextTick(() => htmx.trigger('#create-backend-modal', 'loadForm'))">
+                        + New Backend
+                    </button>
                 </div>
-                <div id="backends-list" class="backend-list">
+
+                <!-- Backends List -->
+                <div hx-get="/api/v1/backends/html" hx-trigger="revealed, backendUpdated from:body" hx-swap="innerHTML">
                     <p class="empty-state">Loading backends...</p>
+                </div>
+
+                <!-- Create Backend Modal -->
+                <div x-show="showCreateModal" @click.self="showCreateModal = false" class="modal"
+                    :class="{ 'active': showCreateModal }">
+                    <div class="modal-content">
+                        <span class="close" @click="showCreateModal = false">&times;</span>
+                        <div id="create-backend-modal" hx-get="/api/v1/backends/form/create" hx-trigger="loadForm"
+                            hx-swap="innerHTML"></div>
+                    </div>
+                </div>
+
+                <!-- Edit Backend Modal -->
+                <div x-show="showEditModal" @click.self="showEditModal = false" class="modal"
+                    :class="{ 'active': showEditModal }">
+                    <div class="modal-content">
+                        <span class="close" @click="showEditModal = false">&times;</span>
+                        <div id="edit-backend-modal"></div>
+                    </div>
                 </div>
             </div>
 
             <!-- History View -->
-            <div id="history-view" class="view">
+            <div x-show="currentView === 'history'">
                 <div class="view-header">
                     <h2>Execution History</h2>
-                    <button class="btn btn-danger" onclick="clearHistory()">Clear History</button>
+                    <button class="btn btn-danger" hx-delete="/api/v1/executions"
+                        hx-confirm="Are you sure you want to clear all history?" hx-target="next div"
+                        hx-swap="innerHTML">
+                        Clear History
+                    </button>
                 </div>
-                <div id="history-list" class="history-list">
+
+                <!-- History List -->
+                <div hx-get="/api/v1/executions/html" hx-trigger="revealed, historyUpdated from:body"
+                    hx-swap="innerHTML">
                     <p class="empty-state">Loading history...</p>
                 </div>
             </div>
         </main>
     </div>
 
-    <!-- Modals -->
-    <div id="modal" class="modal">
-        <div class="modal-content">
-            <span class="close" onclick="closeModal()">&times;</span>
-            <div id="modal-body"></div>
-        </div>
-    </div>
-
     <!-- Toast Notifications Container -->
     <div id="toast-container"></div>
 
-    <!-- Templates -->
-    <template id="task-card-template">
-        <div class="card">
-            <div class="card-header">
-                <div>
-                    <div class="card-title">
-                        <span data-field="name"></span>
-                        <span class="badge" data-field="enabled-badge"></span>
-                    </div>
-                    <div style="color: #666; font-size: 0.85rem;" data-field="description"></div>
-                </div>
-                <div class="card-actions">
-                    <button class="btn btn-sm btn-primary" data-action="run">Run Now</button>
-                    <button class="btn btn-sm" data-action="dry-run">Dry Run</button>
-                    <button class="btn btn-sm" data-action="edit">Edit</button>
-                    <button class="btn btn-sm btn-danger" data-action="delete">Delete</button>
-                </div>
-            </div>
-            <div class="card-body">
-                <p><strong>Mode:</strong> <span data-field="mode"></span></p>
-                <p><strong>Source:</strong> <span data-field="source-path"></span></p>
-                <p><strong>Schedule:</strong> <span data-field="schedule"></span></p>
-                <p><strong>Backends:</strong> <span data-field="backend-count"></span></p>
-            </div>
-            <div class="card-footer">
-                <span data-field="stats"></span>
-            </div>
-        </div>
-    </template>
-
-    <template id="backend-card-template">
-        <div class="card">
-            <div class="card-header">
-                <div>
-                    <div class="card-title" data-field="name"></div>
-                    <div style="color: #666; font-size: 0.85rem;" data-field="type"></div>
-                </div>
-                <div class="card-actions">
-                    <button class="btn btn-sm" data-action="test">Test</button>
-                    <button class="btn btn-sm" data-action="edit">Edit</button>
-                    <button class="btn btn-sm btn-danger" data-action="delete">Delete</button>
-                </div>
-            </div>
-            <div class="card-footer">
-                <span class="badge" data-field="enabled-badge"></span>
-                <span data-field="test-status"></span>
-            </div>
-        </div>
-    </template>
-
-    <template id="execution-card-template">
-        <div class="card">
-            <div class="card-header">
-                <div>
-                    <div class="card-title" data-field="task-name"></div>
-                    <div style="color: #666; font-size: 0.85rem;" data-field="started-at"></div>
-                </div>
-                <span class="badge" data-field="status-badge"></span>
-            </div>
-            <div class="card-body" data-field="details"></div>
-        </div>
-    </template>
-
-    <template id="recent-activity-card-template">
-        <div class="card">
-            <div class="card-header">
-                <span data-field="task-name"></span>
-                <span class="badge" data-field="status-badge"></span>
-            </div>
-            <div class="card-footer">
-                <span data-field="started-at"></span>
-                <span data-field="duration"></span>
-            </div>
-        </div>
-    </template>
-
-    <template id="form-group-template">
-        <div class="form-group">
-            <label data-field="label"></label>
-            <div data-field="content"></div>
-            <small style="color: #666;" data-field="help-text"></small>
-        </div>
-    </template>
-
-    <template id="file-browser-entry-template">
-        <div class="browser-entry"
-            style="padding: 0.75rem; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center;">
-            <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1;">
-                <span style="font-size: 1.2rem;" data-field="icon"></span>
-                <span data-field="name"></span>
-            </div>
-            <div style="color: #888; font-size: 0.85rem;" data-field="size-info"></div>
-        </div>
-    </template>
-
+    <!-- Toast Template -->
     <template id="toast-template">
         <div class="toast">
             <div class="toast-icon" data-field="icon"></div>
@@ -208,70 +165,11 @@
                 <div class="toast-title" data-field="title"></div>
                 <div class="toast-message" data-field="message"></div>
             </div>
-            <button class="toast-close" onclick="closeToast(this)">&times;</button>
+            <button class="toast-close" onclick="window.closeToast(this)">&times;</button>
         </div>
     </template>
 
-    <template id="file-browser-modal-template">
-        <h2>Browse Source Directories</h2>
-        <div id="file-browser" style="min-height: 400px;">
-            <div id="browser-path"
-                style="margin-bottom: 1rem; padding: 0.75rem; background: #2a2a2a; border-radius: 4px; font-family: monospace; font-size: 0.9rem;">
-                <strong>Path:</strong> /data/sources/<span id="current-path"></span>
-            </div>
-            <div id="browser-controls" style="margin-bottom: 1rem; display: flex; gap: 0.5rem;">
-                <button class="btn btn-sm" onclick="navigateUp()" id="up-button" disabled>
-                    ⬆️ Up
-                </button>
-                <button class="btn btn-sm btn-primary" id="select-path-btn">
-                    ✓ Select Current Directory
-                </button>
-            </div>
-            <div id="browser-list"
-                style="max-height: 400px; overflow-y: auto; border: 1px solid #333; border-radius: 4px;">
-                <p style="padding: 1rem; text-align: center;">Loading...</p>
-            </div>
-        </div>
-        <div class="form-actions" style="margin-top: 1rem;">
-            <button type="button" class="btn" onclick="closeModal()">Cancel</button>
-        </div>
-    </template>
-
-    <template id="dry-run-stat-card-template">
-        <div>
-            <div style="color: #666; font-size: 0.85rem;" data-field="label"></div>
-            <div style="font-size: 1.2rem; font-weight: bold;" data-field="value"></div>
-        </div>
-    </template>
-
-    <template id="dry-run-backend-template">
-        <div style="background: #1a1a1a; padding: 1rem; border-radius: 6px; border-left: 3px solid var(--status-color);">
-            <div style="display: flex; justify-content: space-between; align-items: start;">
-                <div style="flex: 1;">
-                    <div style="font-weight: bold; margin-bottom: 0.25rem;" data-field="name"></div>
-                    <div style="color: #888; font-size: 0.85rem;" data-field="type"></div>
-                    <div style="color: #666; font-size: 0.85rem; margin-top: 0.25rem;" data-field="path"></div>
-                </div>
-                <div style="color: #ff6b6b; font-size: 0.85rem; text-align: right; max-width: 50%;" data-field="error"></div>
-            </div>
-        </div>
-    </template>
-
-    <template id="dry-run-file-row-template">
-        <tr style="border-bottom: 1px solid #333;">
-            <td style="padding: 0.5rem; font-size: 0.9rem; word-break: break-all;" data-field="path"></td>
-            <td style="padding: 0.5rem; text-align: right; white-space: nowrap;" data-field="size"></td>
-        </tr>
-    </template>
-
-    <template id="dry-run-filetype-template">
-        <div style="background: #1a1a1a; padding: 0.75rem; border-radius: 6px; text-align: center;">
-            <div style="font-weight: bold; font-size: 1.1rem;" data-field="count"></div>
-            <div style="color: #888; font-size: 0.85rem;" data-field="extension"></div>
-        </div>
-    </template>
-
-    <script type="module" src="/js/app.js"></script>
+    <script src="/js/app.js"></script>
 </body>
 
 </html>

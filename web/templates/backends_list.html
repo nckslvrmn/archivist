@@ -1,0 +1,43 @@
+{{if .}}
+    {{range .}}
+    <div class="card">
+        <div class="card-header">
+            <div>
+                <div class="card-title">{{.Name}}</div>
+                <div style="color: #666; font-size: 0.85rem;">{{.Type}}</div>
+            </div>
+            <div class="card-actions">
+                <button class="btn btn-sm"
+                    hx-post="/api/v1/backends/{{.ID}}/test"
+                    hx-swap="none"
+                    hx-on::after-request="htmx.trigger('body', 'backendUpdated'); if(event.detail.successful) { showToast('Backend test successful', 'success'); } else { showToast('Backend test failed', 'error'); }">
+                    Test
+                </button>
+                <button class="btn btn-sm"
+                    hx-get="/api/v1/backends/form/edit/{{.ID}}"
+                    hx-target="#edit-backend-modal"
+                    hx-swap="innerHTML"
+                    @click="$root.showEditModal = true">
+                    Edit
+                </button>
+                <button class="btn btn-sm btn-danger"
+                    hx-delete="/api/v1/backends/{{.ID}}"
+                    hx-confirm="Are you sure you want to delete this backend?"
+                    hx-target="closest .card"
+                    hx-swap="outerHTML swap:1s"
+                    hx-on::after-request="htmx.trigger('body', 'backendUpdated'); showToast('Backend deleted', 'success')">
+                    Delete
+                </button>
+            </div>
+        </div>
+        <div class="card-footer">
+            <span class="badge badge-{{if .Enabled}}success{{else}}disabled{{end}}">
+                {{if .Enabled}}Enabled{{else}}Disabled{{end}}
+            </span>
+            <span>{{if .LastTestStatus}}Last test: {{.LastTestStatus}}{{else}}Never tested{{end}}</span>
+        </div>
+    </div>
+    {{end}}
+{{else}}
+<p class="empty-state">No backends configured. Add your first storage backend!</p>
+{{end}}

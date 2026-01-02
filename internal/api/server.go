@@ -77,29 +77,47 @@ func (s *Server) Router() *mux.Router {
 	// API routes
 	api := r.PathPrefix("/api/v1").Subrouter()
 
-	// Tasks
+	// HTML routes MUST come before parameterized routes to avoid conflicts
+	// Tasks HTML
+	api.HandleFunc("/tasks/html", s.listTasksHTML).Methods("GET")
+	api.HandleFunc("/tasks/form/create", s.createTaskFormHTML).Methods("GET")
+	api.HandleFunc("/tasks/form/edit/{id}", s.editTaskFormHTML).Methods("GET")
+
+	// Backends HTML
+	api.HandleFunc("/backends/html", s.listBackendsHTML).Methods("GET")
+	api.HandleFunc("/backends/form/create", s.createBackendFormHTML).Methods("GET")
+	api.HandleFunc("/backends/form/edit/{id}", s.editBackendFormHTML).Methods("GET")
+
+	// Executions HTML
+	api.HandleFunc("/executions/html", s.listExecutionsHTML).Methods("GET")
+
+	// Dashboard HTML
+	api.HandleFunc("/dashboard/html", s.dashboardHTML).Methods("GET")
+
+	// Tasks (JSON API)
 	api.HandleFunc("/tasks", s.listTasks).Methods("GET")
 	api.HandleFunc("/tasks", s.createTask).Methods("POST")
-	api.HandleFunc("/tasks/{id}", s.getTask).Methods("GET")
-	api.HandleFunc("/tasks/{id}", s.updateTask).Methods("PUT")
-	api.HandleFunc("/tasks/{id}", s.deleteTask).Methods("DELETE")
+	api.HandleFunc("/tasks/{id}/dry-run", s.dryRunTaskHTML).Methods("POST")
 	api.HandleFunc("/tasks/{id}/execute", s.executeTask).Methods("POST")
 	api.HandleFunc("/tasks/{id}/enable", s.enableTask).Methods("POST")
 	api.HandleFunc("/tasks/{id}/disable", s.disableTask).Methods("POST")
+	api.HandleFunc("/tasks/{id}", s.getTask).Methods("GET")
+	api.HandleFunc("/tasks/{id}", s.updateTask).Methods("PUT")
+	api.HandleFunc("/tasks/{id}", s.deleteTask).Methods("DELETE")
 
-	// Backends
+	// Backends (JSON API)
 	api.HandleFunc("/backends", s.listBackends).Methods("GET")
 	api.HandleFunc("/backends", s.createBackend).Methods("POST")
+	api.HandleFunc("/backends/{id}/test", s.testBackend).Methods("POST")
 	api.HandleFunc("/backends/{id}", s.getBackend).Methods("GET")
 	api.HandleFunc("/backends/{id}", s.updateBackend).Methods("PUT")
 	api.HandleFunc("/backends/{id}", s.deleteBackend).Methods("DELETE")
-	api.HandleFunc("/backends/{id}/test", s.testBackend).Methods("POST")
 
-	// Executions
+	// Executions (JSON API)
 	api.HandleFunc("/executions", s.listExecutions).Methods("GET")
 	api.HandleFunc("/executions", s.clearHistory).Methods("DELETE")
-	api.HandleFunc("/executions/{id}", s.getExecution).Methods("GET")
 	api.HandleFunc("/executions/{id}/cancel", s.cancelExecution).Methods("POST")
+	api.HandleFunc("/executions/{id}", s.getExecution).Methods("GET")
 
 	// Sources
 	api.HandleFunc("/sources", s.listSources).Methods("GET")

@@ -1,0 +1,60 @@
+{{if .}}
+    {{range .}}
+    <div class="card">
+        <div class="card-header">
+            <div>
+                <div class="card-title">
+                    <span>{{.Task.Name}}</span>
+                    <span class="badge badge-{{if .Task.Enabled}}success{{else}}disabled{{end}}">
+                        {{if .Task.Enabled}}Enabled{{else}}Disabled{{end}}
+                    </span>
+                </div>
+                <div style="color: #666; font-size: 0.85rem;">{{.Task.Description}}</div>
+            </div>
+            <div class="card-actions">
+                <button class="btn btn-sm btn-primary"
+                    {{if .Task.Enabled}}
+                    hx-post="/api/v1/tasks/{{.Task.ID}}/execute"
+                    hx-swap="none"
+                    hx-on::after-request="htmx.trigger('body', 'taskUpdated'); showToast('Task execution started', 'success')"
+                    {{else}}disabled{{end}}>
+                    Run Now
+                </button>
+                <button class="btn btn-sm"
+                    hx-post="/api/v1/tasks/{{.Task.ID}}/dry-run"
+                    hx-target="#dry-run-modal"
+                    hx-swap="innerHTML"
+                    @click="$root.showDryRunModal = true">
+                    Dry Run
+                </button>
+                <button class="btn btn-sm"
+                    hx-get="/api/v1/tasks/form/edit/{{.Task.ID}}"
+                    hx-target="#edit-task-modal"
+                    hx-swap="innerHTML"
+                    @click="$root.showEditModal = true">
+                    Edit
+                </button>
+                <button class="btn btn-sm btn-danger"
+                    hx-delete="/api/v1/tasks/{{.Task.ID}}"
+                    hx-confirm="Are you sure you want to delete this task?"
+                    hx-target="closest .card"
+                    hx-swap="outerHTML swap:1s"
+                    hx-on::after-request="htmx.trigger('body', 'taskUpdated'); showToast('Task deleted', 'success')">
+                    Delete
+                </button>
+            </div>
+        </div>
+        <div class="card-body">
+            <p><strong>Mode:</strong> {{if eq .Task.ArchiveOptions.Format "sync"}}🔄 Sync{{else}}📦 Archive{{end}}</p>
+            <p><strong>Source:</strong> {{.Task.SourcePath}}</p>
+            <p><strong>Schedule:</strong> {{.Task.Schedule.Type}}</p>
+            <p><strong>Backends:</strong> {{len .Task.BackendIDs}}</p>
+        </div>
+        <div class="card-footer">
+            <span>{{if .Stats}}{{.Stats.SuccessCount}} successes{{else}}No executions yet{{end}}</span>
+        </div>
+    </div>
+    {{end}}
+{{else}}
+<p class="empty-state">No tasks configured. Create your first task!</p>
+{{end}}
