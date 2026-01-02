@@ -24,10 +24,6 @@ FROM alpine:latest
 # Install runtime dependencies
 RUN apk --no-cache add ca-certificates sqlite tzdata
 
-# Create non-root user
-RUN addgroup -g 1000 archivist && \
-    adduser -D -u 1000 -G archivist archivist
-
 WORKDIR /app
 
 # Copy binary from builder
@@ -37,11 +33,7 @@ COPY --from=builder /app/archivist .
 COPY --from=builder /app/web/static ./web/static
 
 # Create required directories
-RUN mkdir -p /data/sources /data/config /data/temp && \
-    chown -R archivist:archivist /app /data
-
-# Switch to non-root user
-USER archivist
+RUN mkdir -p /data/sources /data/config /data/temp
 
 # Expose HTTP port
 EXPOSE 8080

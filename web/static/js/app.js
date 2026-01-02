@@ -169,33 +169,42 @@ function renderTasks(tasks) {
         return;
     }
 
-    container.innerHTML = tasks.map(task => `
+    container.innerHTML = tasks.map(task => {
+        const mode = task.archive_options?.format === 'sync' ? 'sync' : 'archive';
+        const modeIcon = mode === 'sync' ? '🔄' : '📦';
+        const modeLabel = mode === 'sync' ? 'Sync' : 'Archive';
+
+        return `
         <div class="card">
             <div class="card-header">
                 <div>
-                    <div class="card-title">${task.name}</div>
+                    <div class="card-title">
+                        ${task.name}
+                        <span class="badge badge-${task.enabled ? 'success' : 'disabled'}" style="margin-left: 0.5rem; font-size: 0.75rem;">
+                            ${task.enabled ? 'Enabled' : 'Disabled'}
+                        </span>
+                    </div>
                     <div style="color: #666; font-size: 0.85rem;">${task.description || ''}</div>
                 </div>
                 <div class="card-actions">
-                    <button class="btn btn-sm btn-primary" onclick="executeTask('${task.id}')">Run Now</button>
+                    <button class="btn btn-sm btn-primary" onclick="executeTask('${task.id}')" ${!task.enabled ? 'disabled' : ''}>Run Now</button>
                     <button class="btn btn-sm" onclick="dryRunTask('${task.id}')">Dry Run</button>
                     <button class="btn btn-sm" onclick="editTask('${task.id}')">Edit</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteTask('${task.id}')">Delete</button>
                 </div>
             </div>
             <div class="card-body">
+                <p><strong>Mode:</strong> ${modeIcon} ${modeLabel}</p>
                 <p><strong>Source:</strong> ${task.source_path}</p>
                 <p><strong>Schedule:</strong> ${getScheduleText(task.schedule)}</p>
                 <p><strong>Backends:</strong> ${task.backend_ids.length}</p>
             </div>
             <div class="card-footer">
-                <span class="badge badge-${task.enabled ? 'success' : 'disabled'}">
-                    ${task.enabled ? 'Enabled' : 'Disabled'}
-                </span>
                 <span>${task.stats ? `${task.stats.success_count} successes` : 'No executions yet'}</span>
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 }
 
 function getScheduleText(schedule) {
@@ -289,7 +298,7 @@ function showDryRunResults(result) {
     `;
 
     // Archive details (if archive mode)
-    if (result.archive_details) {
+    if (result.mode === 'archive' && result.archive_details) {
         summaryHTML += `
             <div style="background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">
                 <h3 style="margin: 0 0 1rem 0; color: #00ff88;">📦 Archive Details</h3>
@@ -312,13 +321,13 @@ function showDryRunResults(result) {
     }
 
     // Sync details (if sync mode)
-    if (result.sync_details) {
+    if (result.mode === 'sync' && result.sync_details) {
         summaryHTML += `
             <div style="background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">
                 <h3 style="margin: 0 0 1rem 0; color: #00ff88;">🔄 Sync Analysis</h3>
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem;">
                     <div>
-                        <div style="color: #666; font-size: 0.85rem;">To Upload</div>
+                        <div style="color: #666; font-size: 0.85rem;">To Upload/Modify</div>
                         <div style="font-size: 1.2rem; font-weight: bold; color: #00ff88;">${result.sync_details.upload_count} files</div>
                         <div style="font-size: 0.85rem; color: #888;">${formatBytes(result.sync_details.bytes_to_upload)}</div>
                     </div>
@@ -327,12 +336,78 @@ function showDryRunResults(result) {
                         <div style="font-size: 1.2rem; font-weight: bold;">${result.sync_details.skip_count} files</div>
                     </div>
                     <div>
-                        <div style="color: #666; font-size: 0.85rem;">To Delete</div>
+                        <div style="color: #666; font-size: 0.85rem;">To Remove</div>
                         <div style="font-size: 1.2rem; font-weight: bold; color: #ff6b6b;">${result.sync_details.delete_count} files</div>
                     </div>
                 </div>
             </div>
         `;
+
+        // Files to upload/modify section
+        if (result.sync_details.files_to_upload && result.sync_details.files_to_upload.length > 0) {
+            summaryHTML += `
+                <div style="background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">
+                    <h3 style="margin: 0 0 1rem 0; color: #00ff88;">📤 Files to Upload/Modify</h3>
+                    <div style="max-height: 400px; overflow-y: auto;">
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid #444;">
+                                    <th style="text-align: left; padding: 0.5rem; color: #888; font-size: 0.85rem;">File</th>
+                                    <th style="text-align: left; padding: 0.5rem; color: #888; font-size: 0.85rem;">Reason</th>
+                                    <th style="text-align: right; padding: 0.5rem; color: #888; font-size: 0.85rem;">Size</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+            `;
+
+            result.sync_details.files_to_upload.forEach(file => {
+                summaryHTML += `
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 0.5rem; font-size: 0.9rem; word-break: break-all;">${file.relative_path}</td>
+                        <td style="padding: 0.5rem; font-size: 0.85rem; color: #888;">${file.reason || 'Changed'}</td>
+                        <td style="padding: 0.5rem; text-align: right; white-space: nowrap;">${formatBytes(file.size)}</td>
+                    </tr>
+                `;
+            });
+
+            summaryHTML += `
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Files to delete section
+        if (result.sync_details.files_to_delete && result.sync_details.files_to_delete.length > 0) {
+            summaryHTML += `
+                <div style="background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">
+                    <h3 style="margin: 0 0 1rem 0; color: #ff6b6b;">🗑️ Files to Remove from Remote</h3>
+                    <div style="max-height: 300px; overflow-y: auto;">
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid #444;">
+                                    <th style="text-align: left; padding: 0.5rem; color: #888; font-size: 0.85rem;">File</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+            `;
+
+            result.sync_details.files_to_delete.forEach(filePath => {
+                summaryHTML += `
+                    <tr style="border-bottom: 1px solid #333;">
+                        <td style="padding: 0.5rem; font-size: 0.9rem; word-break: break-all; color: #ff6b6b;">${filePath}</td>
+                    </tr>
+                `;
+            });
+
+            summaryHTML += `
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
     }
 
     // Backend status
@@ -453,6 +528,8 @@ async function editTask(taskId) {
         const task = taskData.data;
         const backends = backendsData.success ? backendsData.data : [];
 
+        const currentMode = task.archive_options?.format === 'sync' ? 'sync' : 'archive';
+
         const modalBody = document.getElementById('modal-body');
         modalBody.innerHTML = `
             <h2>Edit Task</h2>
@@ -506,16 +583,44 @@ async function editTask(taskId) {
                     <input type="text" name="cron_expr" value="${task.schedule.cron_expr || ''}" placeholder="0 2 * * *">
                 </div>
                 <div class="form-group">
-                    <label>Use Timestamp in Filename</label>
-                    <select name="use_timestamp" onchange="updateRetentionVisibility(this.value)">
-                        <option value="true" ${task.archive_options.use_timestamp ? 'selected' : ''}>Yes (Point-in-time backups)</option>
-                        <option value="false" ${!task.archive_options.use_timestamp ? 'selected' : ''}>No (Mirror/overwrite)</option>
+                    <label>Backup Mode *</label>
+                    <select name="backup_mode" onchange="updateBackupModeFields(this.value)">
+                        <option value="archive" ${currentMode === 'archive' ? 'selected' : ''}>Archive (Compressed, point-in-time or mirror)</option>
+                        <option value="sync" ${currentMode === 'sync' ? 'selected' : ''}>Sync (File-by-file, for large directories)</option>
                     </select>
+                    <small style="color: #666;">Archive: Creates compressed archive. Sync: Uploads files individually (efficient for large directories)</small>
                 </div>
-                <div class="form-group" id="retention-field" style="display: ${task.archive_options.use_timestamp ? 'block' : 'none'};">
-                    <label>Retention (Keep Last N Backups, 0 = unlimited)</label>
-                    <input type="number" name="keep_last" value="${task.retention_policy.keep_last}" min="0">
-                    <small style="color: #666;">Only applies to point-in-time backups</small>
+                <div id="archive-options" style="display: ${currentMode === 'archive' ? 'block' : 'none'};">
+                    <div class="form-group">
+                        <label>Use Timestamp in Filename</label>
+                        <select name="use_timestamp" onchange="updateRetentionVisibility(this.value)">
+                            <option value="true" ${task.archive_options.use_timestamp ? 'selected' : ''}>Yes (Point-in-time backups)</option>
+                            <option value="false" ${!task.archive_options.use_timestamp ? 'selected' : ''}>No (Mirror/overwrite)</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="retention-field" style="display: ${task.archive_options.use_timestamp ? 'block' : 'none'};">
+                        <label>Retention (Keep Last N Backups, 0 = unlimited)</label>
+                        <input type="number" name="keep_last" value="${task.retention_policy.keep_last}" min="0">
+                        <small style="color: #666;">Only applies to point-in-time backups</small>
+                    </div>
+                </div>
+                <div id="sync-options" style="display: ${currentMode === 'sync' ? 'block' : 'none'};">
+                    <div class="form-group">
+                        <label>File Comparison Method</label>
+                        <select name="compare_method">
+                            <option value="mtime" ${task.archive_options.sync_options?.compare_method === 'mtime' ? 'selected' : ''}>Modification Time (Faster)</option>
+                            <option value="hash" ${task.archive_options.sync_options?.compare_method === 'hash' ? 'selected' : ''}>Hash/Checksum (Slower, more accurate)</option>
+                        </select>
+                        <small style="color: #666;">Mtime: Quick, compares file timestamps. Hash: Slower, detects content changes</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Delete Remote Files</label>
+                        <select name="delete_remote">
+                            <option value="false" ${!task.archive_options.sync_options?.delete_remote ? 'selected' : ''}>No (Safer - only add/update files)</option>
+                            <option value="true" ${task.archive_options.sync_options?.delete_remote ? 'selected' : ''}>Yes (True mirror - delete remote files not in source)</option>
+                        </select>
+                        <small style="color: #ff4444;">Warning: True mirror will delete remote files that don't exist locally</small>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>Status</label>
@@ -551,6 +656,7 @@ async function handleEditTask(e, taskId) {
         return;
     }
 
+    const backupMode = formData.get('backup_mode');
     const task = {
         name: formData.get('name'),
         description: formData.get('description'),
@@ -561,13 +667,25 @@ async function handleEditTask(e, taskId) {
             simple_type: formData.get('simple_type'),
             cron_expr: formData.get('cron_expr')
         },
-        archive_options: {
+        archive_options: backupMode === 'sync' ? {
+            format: 'sync',
+            compression: 'none',
+            use_timestamp: false,
+            sync_options: {
+                compare_method: formData.get('compare_method') || 'mtime',
+                delete_remote: formData.get('delete_remote') === 'true'
+            }
+        } : {
             format: 'tar.gz',
             compression: 'gzip',
-            use_timestamp: formData.get('use_timestamp') === 'true'
+            use_timestamp: formData.get('use_timestamp') === 'true',
+            sync_options: {
+                compare_method: 'mtime',
+                delete_remote: false
+            }
         },
         retention_policy: {
-            keep_last: parseInt(formData.get('keep_last'))
+            keep_last: backupMode === 'sync' ? 0 : parseInt(formData.get('keep_last'))
         },
         enabled: formData.get('enabled') === 'true'
     };
@@ -714,6 +832,14 @@ async function showCreateTask() {
                     <small style="color: #ff4444;">Warning: True mirror will delete remote files that don't exist locally</small>
                 </div>
             </div>
+            <div class="form-group">
+                <label>Initial Status</label>
+                <select name="enabled">
+                    <option value="false" selected>Disabled (Safer - enable after reviewing)</option>
+                    <option value="true">Enabled (Will run on schedule)</option>
+                </select>
+                <small style="color: #666;">New tasks are disabled by default for safety</small>
+            </div>
             <div class="form-actions">
                 <button type="button" class="btn" onclick="closeModal()">Cancel</button>
                 <button type="submit" class="btn btn-primary" ${backends.length === 0 ? 'disabled' : ''}>Create Task</button>
@@ -795,7 +921,7 @@ async function handleCreateTask(e) {
         retention_policy: {
             keep_last: backupMode === 'sync' ? 0 : parseInt(formData.get('keep_last'))
         },
-        enabled: true
+        enabled: formData.get('enabled') === 'true'
     };
 
     try {
