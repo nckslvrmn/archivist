@@ -528,7 +528,9 @@ async function editTask(taskId) {
         const task = taskData.data;
         const backends = backendsData.success ? backendsData.data : [];
 
+        // Detect current mode - check format field
         const currentMode = task.archive_options?.format === 'sync' ? 'sync' : 'archive';
+        console.log('Edit Task - Detected mode:', currentMode, 'Format:', task.archive_options?.format);
 
         const modalBody = document.getElementById('modal-body');
         modalBody.innerHTML = `
@@ -608,7 +610,7 @@ async function editTask(taskId) {
                     <div class="form-group">
                         <label>File Comparison Method</label>
                         <select name="compare_method">
-                            <option value="mtime" ${task.archive_options.sync_options?.compare_method === 'mtime' ? 'selected' : ''}>Modification Time (Faster)</option>
+                            <option value="mtime" ${!task.archive_options.sync_options?.compare_method || task.archive_options.sync_options?.compare_method === 'mtime' ? 'selected' : ''}>Modification Time (Faster)</option>
                             <option value="hash" ${task.archive_options.sync_options?.compare_method === 'hash' ? 'selected' : ''}>Hash/Checksum (Slower, more accurate)</option>
                         </select>
                         <small style="color: #666;">Mtime: Quick, compares file timestamps. Hash: Slower, detects content changes</small>
@@ -617,7 +619,7 @@ async function editTask(taskId) {
                         <label>Delete Remote Files</label>
                         <select name="delete_remote">
                             <option value="false" ${!task.archive_options.sync_options?.delete_remote ? 'selected' : ''}>No (Safer - only add/update files)</option>
-                            <option value="true" ${task.archive_options.sync_options?.delete_remote ? 'selected' : ''}>Yes (True mirror - delete remote files not in source)</option>
+                            <option value="true" ${task.archive_options.sync_options?.delete_remote === true ? 'selected' : ''}>Yes (True mirror - delete remote files not in source)</option>
                         </select>
                         <small style="color: #ff4444;">Warning: True mirror will delete remote files that don't exist locally</small>
                     </div>
