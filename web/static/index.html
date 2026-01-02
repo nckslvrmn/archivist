@@ -237,6 +237,40 @@
         </div>
     </template>
 
+    <template id="dry-run-stat-card-template">
+        <div>
+            <div style="color: #666; font-size: 0.85rem;" data-field="label"></div>
+            <div style="font-size: 1.2rem; font-weight: bold;" data-field="value"></div>
+        </div>
+    </template>
+
+    <template id="dry-run-backend-template">
+        <div style="background: #1a1a1a; padding: 1rem; border-radius: 6px; border-left: 3px solid var(--status-color);">
+            <div style="display: flex; justify-content: space-between; align-items: start;">
+                <div style="flex: 1;">
+                    <div style="font-weight: bold; margin-bottom: 0.25rem;" data-field="name"></div>
+                    <div style="color: #888; font-size: 0.85rem;" data-field="type"></div>
+                    <div style="color: #666; font-size: 0.85rem; margin-top: 0.25rem;" data-field="path"></div>
+                </div>
+                <div style="color: #ff6b6b; font-size: 0.85rem; text-align: right; max-width: 50%;" data-field="error"></div>
+            </div>
+        </div>
+    </template>
+
+    <template id="dry-run-file-row-template">
+        <tr style="border-bottom: 1px solid #333;">
+            <td style="padding: 0.5rem; font-size: 0.9rem; word-break: break-all;" data-field="path"></td>
+            <td style="padding: 0.5rem; text-align: right; white-space: nowrap;" data-field="size"></td>
+        </tr>
+    </template>
+
+    <template id="dry-run-filetype-template">
+        <div style="background: #1a1a1a; padding: 0.75rem; border-radius: 6px; text-align: center;">
+            <div style="font-weight: bold; font-size: 1.1rem;" data-field="count"></div>
+            <div style="color: #888; font-size: 0.85rem;" data-field="extension"></div>
+        </div>
+    </template>
+
     <script type="module" src="/js/app.js"></script>
 </body>
 

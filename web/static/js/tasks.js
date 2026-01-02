@@ -5,6 +5,7 @@ import { showModal, closeModal, setModalContent } from './modal.js';
 import { showFileBrowser } from './file-browser.js';
 import { createFormGroup, createInput, createTextarea, createSelect, createCheckboxGroup, createFormActions } from './form-builder.js';
 import { loadDashboard } from './dashboard.js';
+import { renderDryRunResults } from './dry-run-results.js';
 
 export function initTasks() {
     loadTasks();
@@ -112,48 +113,7 @@ async function dryRunTask(taskId) {
 }
 
 function showDryRunResults(result) {
-    // This function is large - keeping implementation from original for now
-    // Could be further extracted into a template
-    const formatBytes = (bytes) => {
-        if (bytes === 0) return '0 B';
-        const k = 1024;
-        const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    };
-
-    const formatNumber = (num) => num.toLocaleString();
-
-    let summaryHTML = `
-        <div style="background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">
-            <h3 style="margin: 0 0 1rem 0; color: #00ff88;">📊 Summary</h3>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
-                <div>
-                    <div style="color: #666; font-size: 0.85rem;">Mode</div>
-                    <div style="font-size: 1.2rem; font-weight: bold;">${result.mode === 'archive' ? '📦 Archive' : '🔄 Sync'}</div>
-                </div>
-                <div>
-                    <div style="color: #666; font-size: 0.85rem;">Total Files</div>
-                    <div style="font-size: 1.2rem; font-weight: bold;">${formatNumber(result.files_summary.total_files)}</div>
-                </div>
-                <div>
-                    <div style="color: #666; font-size: 0.85rem;">Total Size</div>
-                    <div style="font-size: 1.2rem; font-weight: bold;">${formatBytes(result.files_summary.total_size)}</div>
-                </div>
-                <div>
-                    <div style="color: #666; font-size: 0.85rem;">Directories</div>
-                    <div style="font-size: 1.2rem; font-weight: bold;">${formatNumber(result.files_summary.total_dirs)}</div>
-                </div>
-            </div>
-        </div>
-    `;
-
-    // Add more sections as needed (keeping original implementation)
-
-    setModalContent(`
-        <h2 style="margin: 0 0 1.5rem 0;">Dry Run Results - ${result.task_name}</h2>
-        ${summaryHTML}
-    `);
+    setModalContent(renderDryRunResults(result));
 }
 
 async function showCreateTask() {
