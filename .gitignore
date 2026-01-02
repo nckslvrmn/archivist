@@ -1,0 +1,8 @@
+.DS_Store
+
+data/**
+!data/*/
+!data/**/*/*.keep
+
+/archivist
+!cmd/archivist/*.go

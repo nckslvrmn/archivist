@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Archivist - Backup Manager</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Archivist</h1>
+            <p class="subtitle">Multi-Cloud Backup Manager</p>
+        </header>
+
+        <nav>
+            <button class="nav-btn active" data-view="dashboard">Dashboard</button>
+            <button class="nav-btn" data-view="tasks">Tasks</button>
+            <button class="nav-btn" data-view="backends">Backends</button>
+            <button class="nav-btn" data-view="history">History</button>
+        </nav>
+
+        <main>
+            <!-- Dashboard View -->
+            <div id="dashboard-view" class="view active">
+                <h2>Dashboard</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3>Tasks</h3>
+                        <p class="stat-value" id="stat-tasks">-</p>
+                        <p class="stat-label">Total Tasks</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Backends</h3>
+                        <p class="stat-value" id="stat-backends">-</p>
+                        <p class="stat-label">Configured</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Executions</h3>
+                        <p class="stat-value" id="stat-executions">-</p>
+                        <p class="stat-label">Total</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Success Rate</h3>
+                        <p class="stat-value" id="stat-success-rate">-</p>
+                        <p class="stat-label">All Time</p>
+                    </div>
+                </div>
+
+                <h3>Recent Activity</h3>
+                <div id="recent-activity" class="activity-list">
+                    <p class="empty-state">No recent activity</p>
+                </div>
+
+                <h3>Running Tasks</h3>
+                <div id="running-tasks" class="task-list">
+                    <p class="empty-state">No tasks currently running</p>
+                </div>
+            </div>
+
+            <!-- Tasks View -->
+            <div id="tasks-view" class="view">
+                <div class="view-header">
+                    <h2>Backup Tasks</h2>
+                    <button class="btn btn-primary" onclick="showCreateTask()">+ New Task</button>
+                </div>
+                <div id="tasks-list" class="task-list">
+                    <p class="empty-state">Loading tasks...</p>
+                </div>
+            </div>
+
+            <!-- Backends View -->
+            <div id="backends-view" class="view">
+                <div class="view-header">
+                    <h2>Storage Backends</h2>
+                    <button class="btn btn-primary" onclick="showCreateBackend()">+ New Backend</button>
+                </div>
+                <div id="backends-list" class="backend-list">
+                    <p class="empty-state">Loading backends...</p>
+                </div>
+            </div>
+
+            <!-- History View -->
+            <div id="history-view" class="view">
+                <div class="view-header">
+                    <h2>Execution History</h2>
+                    <button class="btn btn-danger" onclick="clearHistory()">Clear History</button>
+                </div>
+                <div id="history-list" class="history-list">
+                    <p class="empty-state">Loading history...</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <div id="modal-body"></div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications Container -->
+    <div id="toast-container"></div>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>
