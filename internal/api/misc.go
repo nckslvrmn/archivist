@@ -107,6 +107,7 @@ func (s *Server) listSourcesHTML(w http.ResponseWriter, r *http.Request) {
 		"Path":           subPath,
 		"ParentPath":     parentPath,
 		"ParentPathFull": parentPathFull,
+		"CurrentPath":    targetDir,
 		"Entries":        sources,
 	}
 

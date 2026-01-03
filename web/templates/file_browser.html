@@ -1,3 +1,26 @@
+<script>
+// Initialize currentPath if it's empty (first load at root)
+if (!window.Alpine) {
+    setTimeout(() => {
+        const form = document.querySelector('form[hx-post="/api/v1/tasks"]');
+        if (form && form.__x) {
+            const data = form.__x.$data;
+            if (data && !data.currentPath) {
+                data.currentPath = '{{.CurrentPath}}';
+            }
+        }
+    }, 0);
+} else {
+    const form = document.querySelector('form[hx-post="/api/v1/tasks"]');
+    if (form && form.__x) {
+        const data = form.__x.$data;
+        if (data && !data.currentPath) {
+            data.currentPath = '{{.CurrentPath}}';
+        }
+    }
+}
+</script>
+
 {{if .ParentPath}}
 <div style="margin-bottom: 0.5rem;">
     <button type="button" class="btn"

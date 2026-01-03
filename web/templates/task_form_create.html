@@ -1,6 +1,6 @@
 <h2>Create New Task</h2>
 <form hx-post="/api/v1/tasks" hx-swap="none"
-    hx-on::after-request="if(event.detail.successful) { $root.showCreateModal = false; htmx.trigger('body', 'taskUpdated'); showToast('Task created successfully', 'success'); } else { showToast('Failed to create task', 'error'); }"
+    hx-on::after-request="if(event.detail.successful) { window.dispatchEvent(new CustomEvent('close-create-modal')); htmx.trigger('body', 'taskUpdated'); showToast('Task created successfully', 'success'); } else { showToast('Failed to create task', 'error'); }"
     x-data="{
           scheduleType: 'simple',
           backupMode: 'archive',
@@ -25,7 +25,7 @@
         <label>Source Path *</label>
         <div style="display: flex; gap: 0.5rem;">
             <input type="text" name="source_path" x-model="sourcePath" placeholder="/data/sources/..." required style="flex: 1;">
-            <button type="button" class="btn" @click="showFileBrowser = true; browsePath = ''; $nextTick(() => htmx.trigger('#file-browser-content', 'loadFiles'))">Browse</button>
+            <button type="button" class="btn" @click="showFileBrowser = true; browsePath = ''; currentPath = ''; $nextTick(() => htmx.trigger('#file-browser-content', 'loadFiles'))">Browse</button>
         </div>
     </div>
 
@@ -137,7 +137,7 @@
     </div>
 
     <div class="form-actions">
-        <button type="button" class="btn" @click="$root.showCreateModal = false">Cancel</button>
+        <button type="button" class="btn" @click="window.dispatchEvent(new CustomEvent('close-create-modal'))">Cancel</button>
         <button type="submit" class="btn btn-primary">Create Task</button>
     </div>
 </form>

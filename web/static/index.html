@@ -59,7 +59,8 @@
                 @open-task-edit-modal.window="showEditModal = true"
                 @open-task-dry-run-modal.window="showDryRunModal = true"
                 @close-task-edit-modal.window="showEditModal = false"
-                @close-task-dry-run-modal.window="showDryRunModal = false">
+                @close-task-dry-run-modal.window="showDryRunModal = false"
+                @close-create-modal.window="showCreateModal = false">
                 <div class="view-header">
                     <h2>Backup Tasks</h2>
                     <button class="btn btn-primary" @click="showCreateModal = true;
