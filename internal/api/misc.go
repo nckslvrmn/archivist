@@ -9,6 +9,110 @@ import (
 	"github.com/nsilverman/archivist/internal/models"
 )
 
+// listSourcesHTML handles GET /api/v1/sources (with Accept: text/html)
+// Query params: ?path=/relative/path - to browse subdirectories
+func (s *Server) listSourcesHTML(w http.ResponseWriter, r *http.Request) {
+	settings := s.config.GetSettings()
+	sourcesDir := s.config.ResolvePath(settings.SourcesDir)
+
+	// Get optional path parameter for browsing subdirectories
+	subPath := r.URL.Query().Get("path")
+
+	// Build the target directory path
+	var targetDir string
+	if subPath != "" {
+		// Security: ensure the path doesn't escape the sources directory
+		cleanPath := filepath.Clean(subPath)
+		if filepath.IsAbs(cleanPath) || filepath.HasPrefix(cleanPath, "..") {
+			http.Error(w, "Invalid path", http.StatusBadRequest)
+			return
+		}
+		targetDir = filepath.Join(sourcesDir, cleanPath)
+	} else {
+		targetDir = sourcesDir
+	}
+
+	// Check if target directory exists
+	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
+		s.htmlResponse(w, "file_browser.html", map[string]interface{}{
+			"Path":         subPath,
+			"ParentPath":   "",
+			"ParentPathFull": "",
+			"Entries":      []models.SourceInfo{},
+		})
+		return
+	}
+
+	// Read directory
+	entries, err := os.ReadDir(targetDir)
+	if err != nil {
+		http.Error(w, "Failed to read directory", http.StatusInternalServerError)
+		return
+	}
+
+	type SourceWithRelPath struct {
+		models.SourceInfo
+		RelPath string
+	}
+
+	var sources []SourceWithRelPath
+	for _, entry := range entries {
+		// Only include directories
+		if !entry.IsDir() {
+			continue
+		}
+
+		fullPath := filepath.Join(targetDir, entry.Name())
+		if _, err := os.Stat(fullPath); err != nil {
+			continue
+		}
+
+		// Build relative path from sources directory
+		relPath, err := filepath.Rel(sourcesDir, fullPath)
+		if err != nil {
+			relPath = entry.Name()
+		}
+
+		// Calculate size (simplified - just immediate files)
+		size, count := calculateDirSize(fullPath)
+
+		source := SourceWithRelPath{
+			SourceInfo: models.SourceInfo{
+				Path:       fullPath, // Full absolute path
+				Name:       entry.Name(),
+				Type:       "directory",
+				Size:       size,
+				FileCount:  count,
+				Accessible: true,
+			},
+			RelPath: relPath, // Relative path for navigation
+		}
+
+		sources = append(sources, source)
+	}
+
+	// Calculate parent path
+	var parentPath, parentPathFull string
+	if subPath != "" {
+		parentPath = filepath.Dir(subPath)
+		if parentPath == "." {
+			parentPath = ""
+			parentPathFull = sourcesDir
+		} else {
+			parentPathFull = filepath.Join(sourcesDir, parentPath)
+		}
+	}
+
+	data := map[string]interface{}{
+		"Path":           subPath,
+		"ParentPath":     parentPath,
+		"ParentPathFull": parentPathFull,
+		"Entries":        sources,
+	}
+
+	s.htmlResponse(w, "file_browser.html", data)
+}
+
 // listSources handles GET /api/v1/sources
 // Query params: ?path=/relative/path - to browse subdirectories
 func (s *Server) listSources(w http.ResponseWriter, r *http.Request) {

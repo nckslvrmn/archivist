@@ -94,6 +94,9 @@ func (s *Server) Router() *mux.Router {
 	// Dashboard HTML
 	api.HandleFunc("/dashboard/html", s.dashboardHTML).Methods("GET")
 
+	// Sources HTML (file browser)
+	api.HandleFunc("/sources/html", s.listSourcesHTML).Methods("GET")
+
 	// Tasks (JSON API)
 	api.HandleFunc("/tasks", s.listTasks).Methods("GET")
 	api.HandleFunc("/tasks", s.createTask).Methods("POST")

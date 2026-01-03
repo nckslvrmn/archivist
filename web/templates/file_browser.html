@@ -1,0 +1,31 @@
+{{if .ParentPath}}
+<div style="margin-bottom: 0.5rem;">
+    <button type="button" class="btn"
+            @click="browsePath = '{{.ParentPath}}'; currentPath = '{{.ParentPathFull}}'; $nextTick(() => htmx.trigger('#file-browser-content', 'loadFiles'))"
+            style="width: 100%;">
+        .. (Up to parent directory)
+    </button>
+</div>
+{{end}}
+
+{{if eq (len .Entries) 0}}
+<p class="empty-state">No directories found</p>
+{{else}}
+<div style="display: flex; flex-direction: column; gap: 0.5rem;">
+    {{range .Entries}}
+    {{if eq .Type "directory"}}
+    <button type="button" class="btn"
+            @click="browsePath = '{{.RelPath}}'; currentPath = '{{.Path}}'; $nextTick(() => htmx.trigger('#file-browser-content', 'loadFiles'))"
+            style="width: 100%; text-align: left; display: flex; align-items: center; gap: 0.5rem;">
+        <span style="font-size: 1.2em;">📁</span>
+        <div style="flex: 1;">
+            <div><strong>{{.Name}}</strong></div>
+            {{if gt .FileCount 0}}
+            <div style="font-size: 0.85em; color: var(--text-secondary);">{{.FileCount}} files</div>
+            {{end}}
+        </div>
+    </button>
+    {{end}}
+    {{end}}
+</div>
+{{end}}

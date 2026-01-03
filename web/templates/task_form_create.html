@@ -4,7 +4,11 @@
     x-data="{
           scheduleType: 'simple',
           backupMode: 'archive',
-          useTimestamp: 'true'
+          useTimestamp: 'true',
+          showFileBrowser: false,
+          currentPath: '',
+          browsePath: '',
+          sourcePath: ''
       }">
 
     <div class="form-group">
@@ -19,7 +23,37 @@
 
     <div class="form-group">
         <label>Source Path *</label>
-        <input type="text" name="source_path" placeholder="/data/sources/..." required>
+        <div style="display: flex; gap: 0.5rem;">
+            <input type="text" name="source_path" x-model="sourcePath" placeholder="/data/sources/..." required style="flex: 1;">
+            <button type="button" class="btn" @click="showFileBrowser = true; browsePath = ''; $nextTick(() => htmx.trigger('#file-browser-content', 'loadFiles'))">Browse</button>
+        </div>
+    </div>
+
+    <!-- File Browser Modal (nested within form) -->
+    <div x-show="showFileBrowser" @click.self="showFileBrowser = false" class="modal" :class="{ 'active': showFileBrowser }" style="z-index: 1001;">
+        <div class="modal-content" @click.stop style="max-height: 70vh; overflow: hidden; display: flex; flex-direction: column;">
+            <span class="close" @click="showFileBrowser = false">&times;</span>
+            <h3>Select Source Directory</h3>
+
+            <div style="margin-bottom: 1rem;">
+                <strong>Current Path:</strong> <span x-text="browsePath || '/'"></span>
+            </div>
+
+            <div id="file-browser-content"
+                 hx-get="/api/v1/sources/html"
+                 hx-trigger="loadFiles"
+                 hx-vals="js:{path: document.querySelector('[name=browsePath]').value}"
+                 hx-swap="innerHTML"
+                 style="flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; padding: 1rem;">
+                <p>Loading...</p>
+            </div>
+            <input type="hidden" name="browsePath" x-model="browsePath">
+
+            <div class="form-actions" style="margin-top: 1rem;">
+                <button type="button" class="btn" @click="showFileBrowser = false">Cancel</button>
+                <button type="button" class="btn btn-primary" @click="sourcePath = currentPath; showFileBrowser = false">Select This Directory</button>
+            </div>
+        </div>
     </div>
 
     <div class="form-group">
