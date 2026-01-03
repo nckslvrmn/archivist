@@ -1,7 +1,4 @@
-<h2>Create New Task</h2>
-<form hx-post="/api/v1/tasks" hx-swap="none"
-    hx-on::after-request="if(event.detail.successful) { window.dispatchEvent(new CustomEvent('close-create-modal')); htmx.trigger('body', 'taskUpdated'); showToast('Task created successfully', 'success'); } else { showToast('Failed to create task', 'error'); }"
-    x-data="{
+<div x-data="{
           scheduleType: 'simple',
           backupMode: 'archive',
           useTimestamp: 'true',
@@ -10,6 +7,9 @@
           browsePath: '',
           sourcePath: ''
       }">
+<h2>Create New Task</h2>
+<form hx-post="/api/v1/tasks" hx-swap="none"
+    hx-on::after-request="if(event.detail.successful) { window.dispatchEvent(new CustomEvent('close-create-modal')); htmx.trigger('body', 'taskUpdated'); showToast('Task created successfully', 'success'); } else { showToast('Failed to create task', 'error'); }">
 
     <div class="form-group">
         <label>Task Name *</label>
@@ -26,33 +26,6 @@
         <div style="display: flex; gap: 0.5rem;">
             <input type="text" name="source_path" x-model="sourcePath" placeholder="/data/sources/..." required style="flex: 1;">
             <button type="button" class="btn" @click="showFileBrowser = true; browsePath = ''; currentPath = ''; $nextTick(() => htmx.trigger('#file-browser-content', 'loadFiles'))">Browse</button>
-        </div>
-    </div>
-
-    <!-- File Browser Modal (nested within form) -->
-    <div x-show="showFileBrowser" @click.stop @click.self="showFileBrowser = false" class="modal" :class="{ 'active': showFileBrowser }" style="z-index: 1001;">
-        <div class="modal-content" @click.stop style="max-height: 70vh; overflow: hidden; display: flex; flex-direction: column;">
-            <span class="close" @click="showFileBrowser = false">&times;</span>
-            <h3>Select Source Directory</h3>
-
-            <div style="margin-bottom: 1rem;">
-                <strong>Current Path:</strong> <span x-text="browsePath || '/'"></span>
-            </div>
-
-            <div id="file-browser-content"
-                 hx-get="/api/v1/sources/html"
-                 hx-trigger="loadFiles"
-                 hx-vals="js:{path: document.querySelector('[name=browsePath]').value}"
-                 hx-swap="innerHTML"
-                 style="flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; padding: 1rem;">
-                <p>Loading...</p>
-            </div>
-            <input type="hidden" name="browsePath" x-model="browsePath">
-
-            <div class="form-actions" style="margin-top: 1rem;">
-                <button type="button" class="btn" @click="showFileBrowser = false">Cancel</button>
-                <button type="button" class="btn btn-primary" @click="if (currentPath) { sourcePath = currentPath; showFileBrowser = false; } else { alert('Please select a directory first'); }">Use Selected Directory</button>
-            </div>
         </div>
     </div>
 
@@ -142,3 +115,31 @@
         <button type="submit" class="btn btn-primary">Create Task</button>
     </div>
 </form>
+
+<!-- File Browser Modal (outside form but in same Alpine context) -->
+<div x-show="showFileBrowser" @click.self="showFileBrowser = false" class="modal" :class="{ 'active': showFileBrowser }" style="position: fixed; inset: 0; z-index: 1001;">
+    <div class="modal-content" @click.stop style="max-height: 70vh; overflow: hidden; display: flex; flex-direction: column;">
+        <span class="close" @click="showFileBrowser = false">&times;</span>
+        <h3>Select Source Directory</h3>
+
+        <div style="margin-bottom: 1rem;">
+            <strong>Current Path:</strong> <span x-text="browsePath || '/'"></span>
+        </div>
+
+        <div id="file-browser-content"
+             hx-get="/api/v1/sources/html"
+             hx-trigger="loadFiles"
+             hx-vals="js:{path: document.querySelector('[name=browsePath]').value}"
+             hx-swap="innerHTML"
+             style="flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; padding: 1rem;">
+            <p>Loading...</p>
+        </div>
+        <input type="hidden" name="browsePath" x-model="browsePath">
+
+        <div class="form-actions" style="margin-top: 1rem;">
+            <button type="button" class="btn" @click="showFileBrowser = false">Cancel</button>
+            <button type="button" class="btn btn-primary" @click="if (currentPath) { sourcePath = currentPath; showFileBrowser = false; } else { alert('Please select a directory first'); }">Use Selected Directory</button>
+        </div>
+    </div>
+</div>
+</div>
