@@ -18,16 +18,16 @@ func (s *Server) listSourcesHTML(w http.ResponseWriter, r *http.Request) {
 	// Get optional path parameter for browsing subdirectories
 	subPath := r.URL.Query().Get("path")
 
+	// Validate path doesn't escape sources directory
+	if err := validateSubPath(subPath); err != nil {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
 	// Build the target directory path
 	var targetDir string
 	if subPath != "" {
-		// Security: ensure the path doesn't escape the sources directory
-		cleanPath := filepath.Clean(subPath)
-		if filepath.IsAbs(cleanPath) || filepath.HasPrefix(cleanPath, "..") {
-			http.Error(w, "Invalid path", http.StatusBadRequest)
-			return
-		}
-		targetDir = filepath.Join(sourcesDir, cleanPath)
+		targetDir = filepath.Join(sourcesDir, subPath)
 	} else {
 		targetDir = sourcesDir
 	}
@@ -123,16 +123,16 @@ func (s *Server) listSources(w http.ResponseWriter, r *http.Request) {
 	// Get optional path parameter for browsing subdirectories
 	subPath := r.URL.Query().Get("path")
 
+	// Validate path doesn't escape sources directory
+	if err := validateSubPath(subPath); err != nil {
+		s.error(w, "VALIDATION_ERROR", "Invalid path", http.StatusBadRequest)
+		return
+	}
+
 	// Build the target directory path
 	var targetDir string
 	if subPath != "" {
-		// Security: ensure the path doesn't escape the sources directory
-		cleanPath := filepath.Clean(subPath)
-		if filepath.IsAbs(cleanPath) || filepath.HasPrefix(cleanPath, "..") {
-			s.error(w, "VALIDATION_ERROR", "Invalid path", http.StatusBadRequest)
-			return
-		}
-		targetDir = filepath.Join(sourcesDir, cleanPath)
+		targetDir = filepath.Join(sourcesDir, subPath)
 	} else {
 		targetDir = sourcesDir
 	}
@@ -238,6 +238,18 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 	s.success(w, map[string]interface{}{
 		"settings": settings,
 	})
+}
+
+// validateSubPath validates that a subpath doesn't escape the base directory
+func validateSubPath(subPath string) error {
+	if subPath == "" {
+		return nil
+	}
+	// filepath.IsLocal ensures the path is relative and doesn't escape (Go 1.20+)
+	if !filepath.IsLocal(subPath) {
+		return filepath.ErrBadPattern
+	}
+	return nil
 }
 
 // calculateDirSize calculates the total size of files in a directory (non-recursive)

@@ -282,16 +282,13 @@ func (m *Manager) AddTask(task *models.Task) error {
 		}
 	}
 
-	// Validate backends exist
+	// Validate backends exist - build map for O(n) lookup
+	backendMap := make(map[string]bool, len(m.config.Backends))
+	for _, backend := range m.config.Backends {
+		backendMap[backend.ID] = true
+	}
 	for _, backendID := range task.BackendIDs {
-		found := false
-		for _, backend := range m.config.Backends {
-			if backend.ID == backendID {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !backendMap[backendID] {
 			return fmt.Errorf("backend not found: %s", backendID)
 		}
 	}
@@ -317,16 +314,13 @@ func (m *Manager) UpdateTask(id string, task *models.Task) error {
 			task.CreatedAt = m.config.Tasks[i].CreatedAt
 			task.UpdatedAt = time.Now()
 
-			// Validate backends exist
+			// Validate backends exist - build map for O(n) lookup
+			backendMap := make(map[string]bool, len(m.config.Backends))
+			for _, backend := range m.config.Backends {
+				backendMap[backend.ID] = true
+			}
 			for _, backendID := range task.BackendIDs {
-				found := false
-				for _, backend := range m.config.Backends {
-					if backend.ID == backendID {
-						found = true
-						break
-					}
-				}
-				if !found {
+				if !backendMap[backendID] {
 					return fmt.Errorf("backend not found: %s", backendID)
 				}
 			}

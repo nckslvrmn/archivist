@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"net/http"
 	"time"
@@ -43,10 +42,28 @@ func (s *Server) getBackend(w http.ResponseWriter, r *http.Request) {
 
 // createBackend handles POST /api/v1/backends
 func (s *Server) createBackend(w http.ResponseWriter, r *http.Request) {
-	var backendData models.Backend
-	if err := json.NewDecoder(r.Body).Decode(&backendData); err != nil {
+	// Parse form data
+	if err := r.ParseForm(); err != nil {
 		s.error(w, "VALIDATION_ERROR", "Invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	// Build backend from form fields
+	backendData := models.Backend{
+		Name:    r.FormValue("name"),
+		Type:    r.FormValue("type"),
+		Enabled: r.FormValue("enabled") == "true",
+		Config:  make(map[string]interface{}),
+	}
+
+	// Extract config_ prefixed fields into Config map
+	for key, values := range r.Form {
+		if len(key) > 7 && key[:7] == "config_" {
+			configKey := key[7:] // Remove "config_" prefix
+			if len(values) > 0 && values[0] != "" {
+				backendData.Config[configKey] = values[0]
+			}
+		}
 	}
 
 	// Validate required fields
@@ -76,17 +93,35 @@ func (s *Server) updateBackend(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
-	var backendData models.Backend
-	if err := json.NewDecoder(r.Body).Decode(&backendData); err != nil {
-		s.error(w, "VALIDATION_ERROR", "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
 	// Get existing backend to preserve masked sensitive fields
 	existing, err := s.config.GetBackend(id)
 	if err != nil {
 		s.error(w, "NOT_FOUND", "Backend not found", http.StatusNotFound)
 		return
+	}
+
+	// Parse form data
+	if err := r.ParseForm(); err != nil {
+		s.error(w, "VALIDATION_ERROR", "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Build backend from form fields
+	backendData := models.Backend{
+		Name:    r.FormValue("name"),
+		Type:    r.FormValue("type"),
+		Enabled: r.FormValue("enabled") == "true",
+		Config:  make(map[string]interface{}),
+	}
+
+	// Extract config_ prefixed fields into Config map
+	for key, values := range r.Form {
+		if len(key) > 7 && key[:7] == "config_" {
+			configKey := key[7:] // Remove "config_" prefix
+			if len(values) > 0 && values[0] != "" {
+				backendData.Config[configKey] = values[0]
+			}
+		}
 	}
 
 	// Merge config, preserving original values for masked fields

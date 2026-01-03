@@ -1,19 +1,16 @@
 package api
 
 import (
-	"html/template"
 	"log"
 	"net/http"
-	"path/filepath"
 )
 
-// htmlResponse renders an HTML template
+// htmlResponse renders a cached HTML template
 func (s *Server) htmlResponse(w http.ResponseWriter, tmplName string, data interface{}) {
-	tmplPath := filepath.Join("web", "templates", tmplName)
-	tmpl, err := template.ParseFiles(tmplPath)
-	if err != nil {
-		log.Printf("Template parse error for %s: %v", tmplName, err)
-		http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
+	tmpl, ok := s.templates[tmplName]
+	if !ok {
+		log.Printf("Template not found: %s", tmplName)
+		http.Error(w, "Template not found", http.StatusInternalServerError)
 		return
 	}
 

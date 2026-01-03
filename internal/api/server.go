@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"html/template"
 	"log"
 	"net/http"
+	"path/filepath"
 	"runtime"
 	"sync"
 
@@ -22,6 +24,7 @@ type Server struct {
 	db        *storage.Database
 	executor  *executor.Executor
 	scheduler *scheduler.Scheduler
+	templates map[string]*template.Template
 	wsClients map[*websocket.Conn]bool
 	wsMu      sync.RWMutex
 	upgrader  websocket.Upgrader
@@ -48,6 +51,7 @@ func NewServer(cfg *config.Manager, db *storage.Database, exec *executor.Executo
 		db:        db,
 		executor:  exec,
 		scheduler: sched,
+		templates: make(map[string]*template.Template),
 		wsClients: make(map[*websocket.Conn]bool),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
@@ -56,10 +60,43 @@ func NewServer(cfg *config.Manager, db *storage.Database, exec *executor.Executo
 		},
 	}
 
+	// Initialize templates
+	if err := s.initTemplates(); err != nil {
+		log.Fatalf("Failed to initialize templates: %v", err)
+	}
+
 	// Set executor's progress broadcaster
 	exec.SetProgressBroadcaster(s)
 
 	return s
+}
+
+// initTemplates loads and caches all HTML templates at startup
+func (s *Server) initTemplates() error {
+	templateFiles := []string{
+		"backends_list.html",
+		"task_dry_run.html",
+		"tasks_list.html",
+		"dashboard.html",
+		"executions_list.html",
+		"file_browser.html",
+		"task_form_create.html",
+		"backend_form_create.html",
+		"backend_form_edit.html",
+		"task_form_edit.html",
+	}
+
+	for _, tmplName := range templateFiles {
+		tmplPath := filepath.Join("web", "templates", tmplName)
+		tmpl, err := template.ParseFiles(tmplPath)
+		if err != nil {
+			return err
+		}
+		s.templates[tmplName] = tmpl
+	}
+
+	log.Printf("Cached %d templates at startup", len(s.templates))
+	return nil
 }
 
 // Router returns the HTTP router
