@@ -6,14 +6,15 @@ RUN apk add --no-cache git gcc musl-dev sqlite-dev
 
 WORKDIR /app
 
-# Copy go mod files
+# Copy go mod files first for dependency caching
 COPY go.mod go.sum ./
 
-# Download dependencies
+# Download dependencies (cached unless go.mod/go.sum changes)
 RUN go mod download
 
-# Copy source code
-COPY . .
+# Copy only Go source code (cached unless .go files change)
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
 
 # Build the binary
 RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o archivist ./cmd/archivist
@@ -29,8 +30,8 @@ WORKDIR /app
 # Copy binary from builder
 COPY --from=builder /app/archivist .
 
-# Copy web static files
-COPY --from=builder /app/web ./web
+# Copy web files directly (not from builder)
+COPY web/ ./web/
 
 # Create required directories
 RUN mkdir -p /data/sources /data/config /data/temp
