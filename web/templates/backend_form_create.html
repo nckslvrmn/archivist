@@ -44,6 +44,155 @@
             <label>Secret Access Key</label>
             <input type="password" name="config_secret_access_key">
         </div>
+        <div class="form-group">
+            <label>Custom Endpoint (for S3-compatible storage)</label>
+            <input type="text" name="config_endpoint" placeholder="https://minio.example.com:9000">
+            <small style="color: #888;">Optional: For MinIO, DigitalOcean Spaces, etc.</small>
+        </div>
+        <div class="form-group">
+            <label>Path Prefix</label>
+            <input type="text" name="config_prefix" placeholder="archivist">
+            <small style="color: #888;">Optional: Organize backups within bucket</small>
+        </div>
+        <div class="form-group">
+            <label>Storage Tier (Class)</label>
+            <select name="config_storage_tier">
+                <option value="STANDARD">Standard (default, frequent access)</option>
+                <option value="STANDARD_IA">Standard-IA (infrequent access, lower cost)</option>
+                <option value="ONEZONE_IA">One Zone-IA (single AZ, lowest IA cost)</option>
+                <option value="INTELLIGENT_TIERING">Intelligent-Tiering (automatic optimization)</option>
+                <option value="GLACIER_IR">Glacier Instant Retrieval (archival, instant)</option>
+                <option value="GLACIER">Glacier Flexible Retrieval (3-5hr retrieval)</option>
+                <option value="DEEP_ARCHIVE">Glacier Deep Archive (12hr retrieval, cheapest)</option>
+            </select>
+            <small style="color: #888;">Choose based on access frequency. Lower tiers = lower storage cost but retrieval fees/delays.</small>
+        </div>
+    </div>
+
+    <div x-show="type === 'gcs'" style="display: none;">
+        <div class="form-group">
+            <label>Bucket Name *</label>
+            <input type="text" name="config_bucket">
+        </div>
+        <div class="form-group">
+            <label>Credentials File Path</label>
+            <input type="text" name="config_credentials_file" placeholder="config/gcs-service-account.json">
+            <small style="color: #888;">Path to service account JSON key (relative to root)</small>
+        </div>
+        <div class="form-group">
+            <label>OR Credentials JSON</label>
+            <textarea name="config_credentials_json" rows="4" placeholder='{"type":"service_account",...}'></textarea>
+            <small style="color: #888;">Paste service account JSON directly</small>
+        </div>
+        <div class="form-group">
+            <label>Project ID</label>
+            <input type="text" name="config_project_id">
+        </div>
+        <div class="form-group">
+            <label>Path Prefix</label>
+            <input type="text" name="config_prefix" placeholder="archivist">
+            <small style="color: #888;">Optional: Organize backups within bucket</small>
+        </div>
+        <div class="form-group">
+            <label>Storage Class</label>
+            <select name="config_storage_tier">
+                <option value="STANDARD">Standard (default, frequent access)</option>
+                <option value="NEARLINE">Nearline (30-day minimum, lower cost)</option>
+                <option value="COLDLINE">Coldline (90-day minimum, very low cost)</option>
+                <option value="ARCHIVE">Archive (365-day minimum, cheapest)</option>
+            </select>
+            <small style="color: #888;">Choose based on access frequency. Lower tiers = lower storage cost but retrieval fees.</small>
+        </div>
+    </div>
+
+    <div x-show="type === 'azure'" style="display: none;" x-data="{ authMethod: 'account_key' }">
+        <div class="form-group">
+            <label>Container Name *</label>
+            <input type="text" name="config_container">
+        </div>
+        <div class="form-group">
+            <label>Account Name *</label>
+            <input type="text" name="config_account_name">
+        </div>
+        <div class="form-group">
+            <label>Authentication Method *</label>
+            <select x-model="authMethod">
+                <option value="account_key">Account Key</option>
+                <option value="sas_token">SAS Token</option>
+                <option value="connection_string">Connection String</option>
+            </select>
+        </div>
+        <div class="form-group" x-show="authMethod === 'account_key'">
+            <label>Account Key</label>
+            <input type="password" name="config_account_key">
+        </div>
+        <div class="form-group" x-show="authMethod === 'sas_token'" style="display: none;">
+            <label>SAS Token</label>
+            <input type="text" name="config_sas_token" placeholder="sv=2020-08-04&ss=b...">
+        </div>
+        <div class="form-group" x-show="authMethod === 'connection_string'" style="display: none;">
+            <label>Connection String</label>
+            <textarea name="config_connection_string" rows="3" placeholder="DefaultEndpointsProtocol=https;AccountName=..."></textarea>
+        </div>
+        <div class="form-group">
+            <label>Path Prefix</label>
+            <input type="text" name="config_prefix" placeholder="archivist">
+            <small style="color: #888;">Optional: Organize backups within container</small>
+        </div>
+        <div class="form-group">
+            <label>Access Tier</label>
+            <select name="config_storage_tier">
+                <option value="">Account Default</option>
+                <option value="Hot">Hot (frequent access, highest cost)</option>
+                <option value="Cool">Cool (30-day minimum, lower cost)</option>
+                <option value="Cold">Cold (90-day minimum, very low cost)</option>
+                <option value="Archive">Archive (180-day minimum, cheapest, rehydration required)</option>
+            </select>
+            <small style="color: #888;">Choose based on access frequency. Lower tiers = lower storage cost but retrieval delays.</small>
+        </div>
+    </div>
+
+    <div x-show="type === 'gdrive'" style="display: none;">
+        <div class="form-group">
+            <label>Credentials File Path</label>
+            <input type="text" name="config_credentials_file" placeholder="config/gdrive-service-account.json">
+            <small style="color: #888;">Path to service account JSON key (relative to root)</small>
+        </div>
+        <div class="form-group">
+            <label>OR Credentials JSON</label>
+            <textarea name="config_credentials_json" rows="4" placeholder='{"type":"service_account",...}'></textarea>
+            <small style="color: #888;">Paste service account JSON directly</small>
+        </div>
+        <div class="form-group">
+            <label>Folder Name</label>
+            <input type="text" name="config_folder_name" placeholder="archivist-backups">
+            <small style="color: #888;">Name of folder to create/use in Drive</small>
+        </div>
+        <div class="form-group">
+            <label>OR Specific Folder ID</label>
+            <input type="text" name="config_folder_id" placeholder="1aBcDeFgHiJkLmNoPqRsTuVwXyZ">
+            <small style="color: #888;">Use specific folder ID (overrides folder name)</small>
+        </div>
+    </div>
+
+    <div x-show="type === 'b2'" style="display: none;">
+        <div class="form-group">
+            <label>Bucket Name *</label>
+            <input type="text" name="config_bucket">
+        </div>
+        <div class="form-group">
+            <label>Application Key ID *</label>
+            <input type="text" name="config_key_id">
+        </div>
+        <div class="form-group">
+            <label>Application Key *</label>
+            <input type="password" name="config_application_key">
+        </div>
+        <div class="form-group">
+            <label>Path Prefix</label>
+            <input type="text" name="config_prefix" placeholder="archivist">
+            <small style="color: #888;">Optional: Organize backups within bucket</small>
+        </div>
     </div>
 
     <div class="form-group">
