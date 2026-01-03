@@ -30,7 +30,7 @@ WORKDIR /app
 COPY --from=builder /app/archivist .
 
 # Copy web static files
-COPY --from=builder /app/web/static ./web/static
+COPY --from=builder /app/web ./web
 
 # Create required directories
 RUN mkdir -p /data/sources /data/config /data/temp
