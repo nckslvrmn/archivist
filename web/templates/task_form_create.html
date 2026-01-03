@@ -30,7 +30,7 @@
     </div>
 
     <!-- File Browser Modal (nested within form) -->
-    <div x-show="showFileBrowser" @click.self="showFileBrowser = false" class="modal" :class="{ 'active': showFileBrowser }" style="z-index: 1001;">
+    <div x-show="showFileBrowser" @click.stop @click.self="showFileBrowser = false" class="modal" :class="{ 'active': showFileBrowser }" style="z-index: 1001;">
         <div class="modal-content" @click.stop style="max-height: 70vh; overflow: hidden; display: flex; flex-direction: column;">
             <span class="close" @click="showFileBrowser = false">&times;</span>
             <h3>Select Source Directory</h3>
