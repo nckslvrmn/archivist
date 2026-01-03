@@ -1,5 +1,5 @@
 <h2>Edit Backend</h2>
-<form hx-put="/api/v1/backends/{{.ID}}" hx-swap="none"
+<form hx-put="/api/v1/backends/{{.ID}}" hx-ext="json-enc" hx-swap="none"
     hx-on::after-request="if(event.detail.successful) { window.dispatchEvent(new CustomEvent('close-backend-edit-modal')); htmx.trigger('body', 'backendUpdated'); showToast('Backend updated successfully', 'success'); } else { showToast('Failed to update backend', 'error'); }"
     x-data="{ type: '{{.Type}}' }">
 
