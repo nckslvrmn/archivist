@@ -29,9 +29,9 @@
         </div>
     </div>
 
-    <div class="form-group">
+    <div class="form-group" x-data="{backends: []}">
         <label>Storage Backend(s) *</label>
-        <div class="backend-selector" x-data="{backends: []}">
+        <div class="backend-selector">
             {{range .Backends}}
             <label class="backend-option">
                 <input type="checkbox" name="backend_ids" value="{{.ID}}" @change="backends = Array.from(document.querySelectorAll('input[name=backend_ids]:checked')).map(el => el.value)">
@@ -42,7 +42,7 @@
             </label>
             {{end}}
         </div>
-        <input type="text" x-model="backends[0]" required style="position: absolute; left: -9999px;" tabindex="-1" aria-hidden="true">
+        <input type="text" x-model="backends[0]" required style="position: absolute; left: -9999px; pointer-events: none;" tabindex="-1" inert>
     </div>
 
     <div class="form-group">
