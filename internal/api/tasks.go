@@ -76,6 +76,13 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Map backup mode to format
+	backupMode := r.FormValue("backup_mode")
+	format := "tar.gz" // default
+	if backupMode == "sync" {
+		format = "sync"
+	}
+
 	// Map form to Task model
 	task := models.Task{
 		Name:        r.FormValue("name"),
@@ -88,7 +95,8 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 			CronExpr:   r.FormValue("cron_expr"),
 		},
 		ArchiveOptions: models.ArchiveOptions{
-			Format:       r.FormValue("backup_mode"),
+			Format:       format,
+			Compression:  "gzip",
 			UseTimestamp: r.FormValue("use_timestamp") == "true",
 			SyncOptions: models.SyncOptions{
 				DeleteRemote: r.FormValue("delete_remote") == "true",
@@ -112,17 +120,6 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	if len(task.BackendIDs) == 0 {
 		s.error(w, "VALIDATION_ERROR", "At least one backend is required", http.StatusBadRequest)
 		return
-	}
-
-	// Set defaults
-	if task.ArchiveOptions.Format == "" {
-		task.ArchiveOptions.Format = "tar.gz"
-	}
-	if task.ArchiveOptions.Compression == "" {
-		task.ArchiveOptions.Compression = "gzip"
-	}
-	if !task.ArchiveOptions.UseTimestamp && task.ArchiveOptions.NamePattern == "" {
-		task.ArchiveOptions.UseTimestamp = true // Default to timestamped backups
 	}
 
 	// Add task
