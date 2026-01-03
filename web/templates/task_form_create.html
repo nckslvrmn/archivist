@@ -8,7 +8,7 @@
           sourcePath: ''
       }">
 <h2>Create New Task</h2>
-<form hx-post="/api/v1/tasks" hx-ext="json-enc" hx-swap="none"
+<form hx-post="/api/v1/tasks" hx-swap="none"
     hx-on::after-request="if(event.detail.successful) { window.dispatchEvent(new CustomEvent('close-create-modal')); htmx.trigger('body', 'taskUpdated'); showToast('Task created successfully', 'success'); } else { showToast('Failed to create task', 'error'); }">
 
     <div class="form-group">

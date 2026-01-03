@@ -1,5 +1,5 @@
 <h2>Edit Task</h2>
-<form hx-put="/api/v1/tasks/{{.Task.ID}}" hx-ext="json-enc" hx-swap="none"
+<form hx-put="/api/v1/tasks/{{.Task.ID}}" hx-swap="none"
     hx-on::after-request="if(event.detail.successful) { window.dispatchEvent(new CustomEvent('close-task-edit-modal')); htmx.trigger('body', 'taskUpdated'); showToast('Task updated successfully', 'success'); } else { showToast('Failed to update task', 'error'); }"
     x-data="{
           scheduleType: '{{.Task.Schedule.Type}}',
