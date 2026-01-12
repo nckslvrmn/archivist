@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
@@ -143,10 +142,50 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
-	var task models.Task
-	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+	// Parse form data
+	if err := r.ParseForm(); err != nil {
 		s.error(w, "VALIDATION_ERROR", "Invalid request body", http.StatusBadRequest)
 		return
+	}
+
+	// Parse keep_last
+	keepLast := 0
+	if keepLastStr := r.FormValue("keep_last"); keepLastStr != "" {
+		if val, err := strconv.Atoi(keepLastStr); err == nil {
+			keepLast = val
+		}
+	}
+
+	// Map backup mode to format
+	backupMode := r.FormValue("backup_mode")
+	format := "tar.gz" // default
+	if backupMode == "sync" {
+		format = "sync"
+	}
+
+	// Map form to Task model
+	task := models.Task{
+		Name:        r.FormValue("name"),
+		Description: r.FormValue("description"),
+		SourcePath:  r.FormValue("source_path"),
+		BackendIDs:  r.Form["backend_ids"],
+		Schedule: models.Schedule{
+			Type:       r.FormValue("schedule_type"),
+			SimpleType: r.FormValue("simple_type"),
+			CronExpr:   r.FormValue("cron_expr"),
+		},
+		ArchiveOptions: models.ArchiveOptions{
+			Format:       format,
+			Compression:  "gzip",
+			UseTimestamp: r.FormValue("use_timestamp") == "true",
+			SyncOptions: models.SyncOptions{
+				DeleteRemote: r.FormValue("delete_remote") == "true",
+			},
+		},
+		RetentionPolicy: models.RetentionPolicy{
+			KeepLast: keepLast,
+		},
+		Enabled: r.FormValue("enabled") == "true",
 	}
 
 	// Update task
