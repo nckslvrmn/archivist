@@ -116,10 +116,23 @@ func (e *Executor) Execute(taskID string) (string, error) {
 
 	// Run execution in background
 	go func() {
+		defer cancel() // release context resources regardless of outcome
 		defer func() {
 			e.mu.Lock()
 			delete(e.running, taskID)
 			e.mu.Unlock()
+		}()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("panic in execution for task %s: %v", task.Name, r)
+				execution.Status = "failed"
+				execution.ErrorMessage = fmt.Sprintf("internal error: %v", r)
+				now := time.Now()
+				execution.CompletedAt = &now
+				if dbErr := e.db.UpdateExecution(execution); dbErr != nil {
+					log.Printf("failed to update execution after panic: %v", dbErr)
+				}
+			}
 		}()
 
 		if err := e.runExecution(ctx, task, execution); err != nil {
@@ -237,11 +250,6 @@ func (e *Executor) dryRunSync(task *models.Task, sourcePath string, backendIDs [
 		if err != nil {
 			continue
 		}
-		defer func() {
-		if err := backendInstance.Close(); err != nil {
-			log.Printf("Error closing backend instance: %v", err)
-		}
-	}()
 
 		// Generate remote path (use task name as folder)
 		remotePath := task.Name
@@ -254,8 +262,14 @@ func (e *Executor) dryRunSync(task *models.Task, sourcePath string, backendIDs [
 		// Perform dry run sync analysis
 		syncer := filesync.NewSyncer(sourcePath, backendInstance, remotePath,
 			task.ArchiveOptions.SyncOptions, nil)
-		syncDetails, err = syncer.DryRun(ctx)
-		if err == nil {
+		details, dryRunErr := syncer.DryRun(ctx)
+
+		if closeErr := backendInstance.Close(); closeErr != nil {
+			log.Printf("Error closing backend instance: %v", closeErr)
+		}
+
+		if dryRunErr == nil {
+			syncDetails = details
 			break // Successfully got sync details
 		}
 	}
@@ -366,17 +380,16 @@ func (e *Executor) analyzeBackends(task *models.Task, backendIDs []string) []mod
 			plans = append(plans, plan)
 			continue
 		}
-		defer func() {
-		if err := backendInstance.Close(); err != nil {
-			log.Printf("Error closing backend instance: %v", err)
-		}
-	}()
 
 		if err := backendInstance.Test(); err != nil {
 			plan.Available = false
 			plan.ErrorMessage = fmt.Sprintf("Connection test failed: %v", err)
 		} else {
 			plan.Available = true
+		}
+
+		if closeErr := backendInstance.Close(); closeErr != nil {
+			log.Printf("Error closing backend instance: %v", closeErr)
 		}
 
 		// Determine remote path
@@ -817,11 +830,6 @@ func (e *Executor) applyRetentionPolicy(ctx context.Context, task *models.Task, 
 		if err != nil {
 			continue
 		}
-		defer func() {
-		if err := backendInstance.Close(); err != nil {
-			log.Printf("Error closing backend instance: %v", err)
-		}
-	}()
 
 		// List backups for this task
 		prefix := result.RemotePath
@@ -834,6 +842,9 @@ func (e *Executor) applyRetentionPolicy(ctx context.Context, task *models.Task, 
 		allFiles, err := backendInstance.List(ctx, prefix)
 		if err != nil {
 			log.Printf("Failed to list backups for retention: %v", err)
+			if closeErr := backendInstance.Close(); closeErr != nil {
+				log.Printf("Error closing backend instance: %v", closeErr)
+			}
 			continue
 		}
 
@@ -863,6 +874,10 @@ func (e *Executor) applyRetentionPolicy(ctx context.Context, task *models.Task, 
 					log.Printf("Deleted old backup: %s", backups[i].Path)
 				}
 			}
+		}
+
+		if closeErr := backendInstance.Close(); closeErr != nil {
+			log.Printf("Error closing backend instance: %v", closeErr)
 		}
 	}
 }

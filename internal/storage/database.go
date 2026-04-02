@@ -268,7 +268,11 @@ func (d *Database) ListExecutions(taskID string, status string, limit, offset in
 		}
 
 		// Load backend results
-		exec.BackendResults, _ = d.getBackendUploads(exec.ID)
+		backendResults, loadErr := d.getBackendUploads(exec.ID)
+		if loadErr != nil {
+			log.Printf("failed to load backend results for execution %s: %v", exec.ID, loadErr)
+		}
+		exec.BackendResults = backendResults
 
 		executions = append(executions, exec)
 	}
@@ -460,7 +464,8 @@ func (d *Database) ClearHistory() error {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer func() {
-		if err := tx.Rollback(); err != nil {
+		// Rollback is a no-op if Commit already succeeded; sql.ErrTxDone is expected in that case.
+		if err := tx.Rollback(); err != nil && err != sql.ErrTxDone {
 			log.Printf("Error rolling back transaction: %v", err)
 		}
 	}()

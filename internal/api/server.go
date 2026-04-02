@@ -189,13 +189,21 @@ func (s *Server) Router() *mux.Router {
 // BroadcastProgress implements executor.ProgressBroadcaster
 func (s *Server) BroadcastProgress(event models.ProgressEvent) {
 	s.wsMu.RLock()
-	defer s.wsMu.RUnlock()
-
+	var failed []*websocket.Conn
 	for client := range s.wsClients {
 		if err := client.WriteJSON(event); err != nil {
-			// Client disconnected, will be cleaned up
-			continue
+			failed = append(failed, client)
 		}
+	}
+	s.wsMu.RUnlock()
+
+	if len(failed) > 0 {
+		s.wsMu.Lock()
+		for _, client := range failed {
+			delete(s.wsClients, client)
+			client.Close()
+		}
+		s.wsMu.Unlock()
 	}
 }
 

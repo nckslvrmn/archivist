@@ -1,126 +1,116 @@
-<script>
-    // Shared formatBytes function for the entire modal
-    window.dryRunFormatBytes = function (b) {
-        if (b === 0) return '0 B';
-        const k = 1024;
+<div x-data="{
+    formatBytes(b) {
+        if (!b) return '0 B';
         const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-        const i = Math.floor(Math.log(b) / Math.log(k));
-        return parseFloat((b / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    };
-</script>
+        const i = Math.floor(Math.log(b) / Math.log(1024));
+        return parseFloat((b / Math.pow(1024, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+}">
 
-<h2 style="margin: 0 0 1.5rem 0;">Dry Run Results - {{.TaskName}}</h2>
+<h2 style="margin: 0 0 1.5rem 0;">Dry Run: {{.TaskName}}</h2>
 
 <!-- Summary Card -->
-<div style="background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">
-    <h3 style="margin: 0 0 1rem 0; color: #00ff88;">📊 Summary</h3>
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
-        <div>
-            <div style="color: #666; font-size: 0.85rem;">Mode</div>
-            <div style="font-size: 1.2rem; font-weight: bold;">{{if eq .Mode "archive"}}📦 Archive{{else}}🔄 Sync{{end}}
-            </div>
+<div class="dry-run-section">
+    <div class="dry-run-section-header">Summary</div>
+    <div class="dry-run-grid">
+        <div class="dry-run-stat">
+            <div class="dry-run-label">Mode</div>
+            <div class="dry-run-value">{{if eq .Mode "archive"}}Archive{{else}}Sync{{end}}</div>
         </div>
-        <div>
-            <div style="color: #666; font-size: 0.85rem;">Total Files</div>
-            <div style="font-size: 1.2rem; font-weight: bold;">{{.FilesSummary.TotalFiles}}</div>
+        <div class="dry-run-stat">
+            <div class="dry-run-label">Total Files</div>
+            <div class="dry-run-value">{{.FilesSummary.TotalFiles}}</div>
         </div>
-        <div>
-            <div style="color: #666; font-size: 0.85rem;">Total Size</div>
-            <div style="font-size: 1.2rem; font-weight: bold;" id="total-size-display"></div>
-            <script>
-                document.getElementById('total-size-display').textContent = window.dryRunFormatBytes({{.FilesSummary.TotalSize }});
-            </script>
+        <div class="dry-run-stat">
+            <div class="dry-run-label">Total Size</div>
+            <div class="dry-run-value" x-text="formatBytes({{.FilesSummary.TotalSize}})"></div>
         </div>
-        <div>
-            <div style="color: #666; font-size: 0.85rem;">Directories</div>
-            <div style="font-size: 1.2rem; font-weight: bold;">{{.FilesSummary.TotalDirs}}</div>
+        <div class="dry-run-stat">
+            <div class="dry-run-label">Directories</div>
+            <div class="dry-run-value">{{.FilesSummary.TotalDirs}}</div>
         </div>
     </div>
 </div>
 
 <!-- Backend Status -->
-<div style="background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">
-    <h3 style="margin: 0 0 1rem 0; color: #00ff88;">💾 Backend Status</h3>
+<div class="dry-run-section">
+    <div class="dry-run-section-header">Backend Status</div>
     {{if .BackendPlans}}
-    <div style="display: flex; flex-direction: column; gap: 1rem;">
+    <div style="display: flex; flex-direction: column; gap: 8px;">
         {{range .BackendPlans}}
-        <div
-            style="padding: 1rem; background: #1a1a1a; border-radius: 6px; border-left: 3px solid {{if .Available}}#00ff88{{else}}#ff4444{{end}};">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+        <div class="dry-run-backend" style="border-left-color: {{if .Available}}var(--accent){{else}}var(--danger){{end}};">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                    <strong style="font-size: 1.1rem;">{{.BackendName}}</strong>
-                    <span style="color: #666; margin-left: 0.5rem;">({{.BackendType}})</span>
+                    <strong>{{.BackendName}}</strong>
+                    <span class="dry-run-type-tag">{{.BackendType}}</span>
                 </div>
-                <div style="font-size: 1.5rem;">
-                    {{if .Available}}✅{{else}}❌{{end}}
-                </div>
+                <span class="badge {{if .Available}}badge-success{{else}}badge-danger{{end}}">
+                    {{if .Available}}ready{{else}}unavailable{{end}}
+                </span>
             </div>
             {{if .ErrorMessage}}
-            <div style="color: #ff6b6b; font-size: 0.9rem; margin-top: 0.5rem;">
-                <strong>Error:</strong> {{.ErrorMessage}}
-            </div>
-            {{else}}
-            <div style="color: #00ff88; font-size: 0.9rem;">
-                Ready to receive backup
-            </div>
+            <div class="dry-run-error">{{.ErrorMessage}}</div>
             {{end}}
         </div>
         {{end}}
     </div>
     {{else}}
-    <p style="color: #666;">No backends configured</p>
+    <p class="empty-state" style="padding: 16px 0;">No backends configured</p>
     {{end}}
 </div>
 
 <!-- File Details -->
 {{if .FilesSummary.LargestFile}}
-<div style="background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">
-    <h3 style="margin: 0 0 1rem 0; color: #00ff88;">📁 File Details</h3>
-    <div style="color: #ccc;">
-        <p style="margin: 0.5rem 0;"><strong>Source Path:</strong> {{.SourcePath}}</p>
-        <p style="margin: 0.5rem 0;"><strong>Largest File:</strong> {{.FilesSummary.LargestFile}}</p>
-        <p style="margin: 0.5rem 0;">
-            <strong>Largest File Size:</strong>
-            <span id="largest-size-display"></span>
-            <script>
-                document.getElementById('largest-size-display').textContent = window.dryRunFormatBytes({{.FilesSummary.LargestFileSize }});
-            </script>
-        </p>
+<div class="dry-run-section">
+    <div class="dry-run-section-header">File Details</div>
+    <div class="dry-run-detail-row">
+        <span class="dry-run-detail-key">Source Path</span>
+        <span class="dry-run-detail-val">{{.SourcePath}}</span>
+    </div>
+    <div class="dry-run-detail-row">
+        <span class="dry-run-detail-key">Largest File</span>
+        <span class="dry-run-detail-val">{{.FilesSummary.LargestFile}}</span>
+    </div>
+    <div class="dry-run-detail-row">
+        <span class="dry-run-detail-key">Largest File Size</span>
+        <span class="dry-run-detail-val" x-text="formatBytes({{.FilesSummary.LargestFileSize}})"></span>
     </div>
 </div>
 {{end}}
 
 <!-- Archive Details -->
 {{if .ArchiveDetails}}
-<div style="background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">
-    <h3 style="margin: 0 0 1rem 0; color: #00ff88;">📦 Archive Details</h3>
-    <div style="color: #ccc;">
-        <p style="margin: 0.5rem 0;"><strong>Estimated Archive Size:</strong>
-            <span id="archive-size-display"></span>
-            <script>
-                document.getElementById('archive-size-display').textContent = window.dryRunFormatBytes({{.ArchiveDetails.EstimatedArchiveSize }});
-            </script>
-        </p>
-        <p style="margin: 0.5rem 0;"><strong>Compression Ratio:</strong> {{printf "%.1f"
-            .ArchiveDetails.CompressionRatio}}%</p>
-        <p style="margin: 0.5rem 0;"><strong>Archive Name:</strong> {{.ArchiveDetails.ArchiveName}}</p>
+<div class="dry-run-section">
+    <div class="dry-run-section-header">Archive Details</div>
+    <div class="dry-run-detail-row">
+        <span class="dry-run-detail-key">Archive Name</span>
+        <span class="dry-run-detail-val">{{.ArchiveDetails.ArchiveName}}</span>
+    </div>
+    <div class="dry-run-detail-row">
+        <span class="dry-run-detail-key">Estimated Size</span>
+        <span class="dry-run-detail-val" x-text="formatBytes({{.ArchiveDetails.EstimatedArchiveSize}})"></span>
+    </div>
+    <div class="dry-run-detail-row">
+        <span class="dry-run-detail-key">Compression Ratio</span>
+        <span class="dry-run-detail-val">{{printf "%.1f" .ArchiveDetails.CompressionRatio}}%</span>
     </div>
 </div>
 {{end}}
 
 <!-- Errors -->
 {{if .Errors}}
-<div style="background: #3a2020; padding: 1.5rem; border-radius: 8px; border-left: 3px solid #ff4444;">
-    <h3 style="margin: 0 0 1rem 0; color: #ff6b6b;">⚠️ Errors</h3>
-    <ul style="margin: 0; padding-left: 1.5rem; color: #ffaaaa;">
+<div class="dry-run-section dry-run-section-error">
+    <div class="dry-run-section-header" style="color: var(--danger);">Errors</div>
+    <ul style="margin: 0; padding-left: 1.25rem; display: flex; flex-direction: column; gap: 6px;">
         {{range .Errors}}
-        <li style="margin: 0.5rem 0;">{{.}}</li>
+        <li style="color: #ffaaaa; font-size: 0.875rem;">{{.}}</li>
         {{end}}
     </ul>
 </div>
 {{end}}
 
-<div
-    style="margin-top: 1.5rem; padding: 1rem; background: #2a2a2a; border-radius: 6px; color: #888; font-size: 0.9rem;">
-    ℹ️ This is a dry run - no files were actually backed up. Run the task to perform the actual backup.
+<div class="dry-run-notice">
+    This is a dry run — no files were backed up. Run the task to perform the actual backup.
+</div>
+
 </div>

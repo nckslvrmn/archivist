@@ -5,6 +5,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Archivist - Backup Manager</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/css/style.css">
 
     <!-- htmx for AJAX interactions -->
@@ -18,9 +21,10 @@
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
 
-<body x-data="{
-    currentView: 'dashboard'
-}">
+<body x-data="{ currentView: 'dashboard' }">
+    <!-- HTMX progress indicator -->
+    <div id="htmx-indicator"></div>
+
     <div class="container">
         <header>
             <h1>Archivist</h1>
@@ -35,7 +39,8 @@
             <button class="nav-btn" :class="{ 'active': currentView === 'tasks' }" @click="currentView = 'tasks'">
                 Tasks
             </button>
-            <button class="nav-btn" :class="{ 'active': currentView === 'backends' }" @click="currentView = 'backends'">
+            <button class="nav-btn" :class="{ 'active': currentView === 'backends' }"
+                @click="currentView = 'backends'">
                 Backends
             </button>
             <button class="nav-btn" :class="{ 'active': currentView === 'history' }" @click="currentView = 'history'">
@@ -47,7 +52,6 @@
             <!-- Dashboard View -->
             <div x-show="currentView === 'dashboard'" hx-get="/api/v1/dashboard/html" hx-trigger="revealed"
                 hx-swap="innerHTML">
-                <h2>Dashboard</h2>
                 <p class="empty-state">Loading dashboard...</p>
             </div>
 
@@ -115,7 +119,8 @@
                 </div>
 
                 <!-- Backends List -->
-                <div hx-get="/api/v1/backends/html" hx-trigger="revealed, backendUpdated from:body" hx-swap="innerHTML">
+                <div hx-get="/api/v1/backends/html" hx-trigger="revealed, backendUpdated from:body"
+                    hx-swap="innerHTML">
                     <p class="empty-state">Loading backends...</p>
                 </div>
 
@@ -124,8 +129,8 @@
                     :class="{ 'active': showCreateModal }">
                     <div class="modal-content">
                         <span class="close" @click="showCreateModal = false">&times;</span>
-                        <div id="create-backend-modal" hx-get="/api/v1/backends/form/create" hx-trigger="loadForm"
-                            hx-swap="innerHTML"></div>
+                        <div id="create-backend-modal" hx-get="/api/v1/backends/form/create"
+                            hx-trigger="loadForm" hx-swap="innerHTML"></div>
                     </div>
                 </div>
 
@@ -159,20 +164,36 @@
         </main>
     </div>
 
-    <!-- Toast Notifications Container -->
-    <div id="toast-container"></div>
-
-    <!-- Toast Template -->
-    <template id="toast-template">
-        <div class="toast">
-            <div class="toast-icon" data-field="icon"></div>
-            <div class="toast-content">
-                <div class="toast-title" data-field="title"></div>
-                <div class="toast-message" data-field="message"></div>
+    <!-- Toast Notifications — managed by Alpine.js, no DOM manipulation needed -->
+    <div id="toast-container"
+         x-data="{
+             toasts: [],
+             icons:  { success: '✓', error: '✕', warning: '⚠', info: 'ℹ' },
+             titles: { success: 'Success', error: 'Error', warning: 'Warning', info: 'Info' },
+             show(message, type = 'info', duration = 4000) {
+                 const id = Date.now() + Math.random();
+                 this.toasts.push({ id, message, type, hiding: false });
+                 if (duration > 0) setTimeout(() => this.hide(id), duration);
+             },
+             hide(id) {
+                 const t = this.toasts.find(t => t.id === id);
+                 if (!t) return;
+                 t.hiding = true;
+                 setTimeout(() => { this.toasts = this.toasts.filter(t => t.id !== id); }, 250);
+             }
+         }"
+         x-init="window.showToast = (message, type, duration) => $data.show(message, type, duration)">
+        <template x-for="toast in toasts" :key="toast.id">
+            <div class="toast" :class="[toast.type, toast.hiding ? 'hiding' : '']">
+                <div class="toast-icon" x-text="icons[toast.type] || icons.info"></div>
+                <div class="toast-content">
+                    <div class="toast-title" x-text="titles[toast.type] || titles.info"></div>
+                    <div class="toast-message" x-text="toast.message"></div>
+                </div>
+                <button class="toast-close" @click="hide(toast.id)">&times;</button>
             </div>
-            <button class="toast-close" onclick="window.closeToast(this)">&times;</button>
-        </div>
-    </template>
+        </template>
+    </div>
 
     <script src="/js/app.js"></script>
 </body>
