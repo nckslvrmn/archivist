@@ -244,12 +244,12 @@ func (b *GCSBackend) Close() error {
 func validateGCSStorageClass(tier string) (string, error) {
 	// GCS storage classes (case-insensitive)
 	validClasses := map[string]string{
-		"STANDARD":         "STANDARD",
-		"NEARLINE":         "NEARLINE",
-		"COLDLINE":         "COLDLINE",
-		"ARCHIVE":          "ARCHIVE",
-		"REGIONAL":         "REGIONAL",         // Legacy, maps to STANDARD
-		"MULTI_REGIONAL":   "MULTI_REGIONAL",   // Legacy, maps to STANDARD
+		"STANDARD":                     "STANDARD",
+		"NEARLINE":                     "NEARLINE",
+		"COLDLINE":                     "COLDLINE",
+		"ARCHIVE":                      "ARCHIVE",
+		"REGIONAL":                     "REGIONAL",                     // Legacy, maps to STANDARD
+		"MULTI_REGIONAL":               "MULTI_REGIONAL",               // Legacy, maps to STANDARD
 		"DURABLE_REDUCED_AVAILABILITY": "DURABLE_REDUCED_AVAILABILITY", // Legacy
 	}
 

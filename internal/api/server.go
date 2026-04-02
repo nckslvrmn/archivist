@@ -186,24 +186,23 @@ func (s *Server) Router() *mux.Router {
 	return r
 }
 
-// BroadcastProgress implements executor.ProgressBroadcaster
+// BroadcastProgress implements executor.ProgressBroadcaster.
+// Uses an exclusive lock so concurrent task goroutines cannot write to the
+// same WebSocket connection simultaneously (gorilla/websocket requires
+// serialised writers).
 func (s *Server) BroadcastProgress(event models.ProgressEvent) {
-	s.wsMu.RLock()
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+
 	var failed []*websocket.Conn
 	for client := range s.wsClients {
 		if err := client.WriteJSON(event); err != nil {
 			failed = append(failed, client)
 		}
 	}
-	s.wsMu.RUnlock()
-
-	if len(failed) > 0 {
-		s.wsMu.Lock()
-		for _, client := range failed {
-			delete(s.wsClients, client)
-			client.Close()
-		}
-		s.wsMu.Unlock()
+	for _, client := range failed {
+		delete(s.wsClients, client)
+		client.Close()
 	}
 }
 

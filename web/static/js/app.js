@@ -7,16 +7,15 @@ document.body.addEventListener('htmx:responseError', (event) => {
 });
 
 document.body.addEventListener('htmx:afterRequest', (event) => {
-    const xhr = event.detail.xhr;
-    if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-            const response = JSON.parse(xhr.responseText);
-            if (response.success && response.message) {
-                window.showToast?.(response.message, 'success');
-            }
-        } catch {
-            // Not JSON — that's fine
+    try {
+        const xhr = event.detail?.xhr;
+        if (!xhr || xhr.status < 200 || xhr.status >= 300) return;
+        const response = JSON.parse(xhr.responseText);
+        if (response.success && response.message) {
+            window.showToast?.(response.message, 'success');
         }
+    } catch {
+        // Not JSON or missing xhr — that's fine
     }
 });
 
@@ -40,6 +39,14 @@ function initWebSocket() {
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         document.dispatchEvent(new CustomEvent('progress-update', { detail: data }));
+
+        // Refresh task list and history when execution state changes so
+        // "running" badges update without requiring a manual page reload.
+        const refreshEvents = ['execution_started', 'execution_completed', 'execution_failed'];
+        if (refreshEvents.includes(data.type)) {
+            htmx.trigger(document.body, 'taskUpdated');
+            htmx.trigger(document.body, 'historyUpdated');
+        }
     };
 
     ws.onclose = () => {

@@ -171,6 +171,7 @@
              icons:  { success: '✓', error: '✕', warning: '⚠', info: 'ℹ' },
              titles: { success: 'Success', error: 'Error', warning: 'Warning', info: 'Info' },
              show(message, type = 'info', duration = 4000) {
+                 if (!message) return;
                  const id = Date.now() + Math.random();
                  this.toasts.push({ id, message, type, hiding: false });
                  if (duration > 0) setTimeout(() => this.hide(id), duration);

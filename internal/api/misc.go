@@ -35,10 +35,10 @@ func (s *Server) listSourcesHTML(w http.ResponseWriter, r *http.Request) {
 	// Check if target directory exists
 	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
 		s.htmlResponse(w, "file_browser.html", map[string]interface{}{
-			"Path":         subPath,
-			"ParentPath":   "",
+			"Path":           subPath,
+			"ParentPath":     "",
 			"ParentPathFull": "",
-			"Entries":      []models.SourceInfo{},
+			"Entries":        []models.SourceInfo{},
 		})
 		return
 	}
