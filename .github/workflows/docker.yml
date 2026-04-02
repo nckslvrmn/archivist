@@ -1,0 +1,43 @@
+name: Deploy Image to GHCR
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  push-archivist-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: "Checkout GitHub Action"
+        uses: actions/checkout@v5
+
+      - name: "Login to GitHub Container Registry"
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{github.actor}}
+          password: ${{secrets.GITHUB_TOKEN}}
+
+      - name: Build and push with version tag
+        run: |
+          VERSION=${{ github.ref_name }}
+
+          docker build . --tag ghcr.io/${{ github.repository_owner }}/archivist:${VERSION}
+          docker build . --tag ghcr.io/${{ github.repository_owner }}/archivist:latest
+          docker push ghcr.io/${{ github.repository_owner }}/archivist:${VERSION}
+          docker push ghcr.io/${{ github.repository_owner }}/archivist:latest
+
+  deploy:
+    needs: push-archivist-image
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nckslvrmn/docker-compose-deploy@main
+        with:
+          file: compose.yml
+        env:
+          ARCHIVIST_VERSION: ${{ github.ref_name }}
