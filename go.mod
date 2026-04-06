@@ -14,7 +14,7 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/kurin/blazer v0.5.3
-	github.com/mattn/go-sqlite3 v1.14.38
+	github.com/mattn/go-sqlite3 v1.14.40
 	github.com/robfig/cron/v3 v3.0.1
 	google.golang.org/api v0.274.0
 )
