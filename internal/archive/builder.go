@@ -130,7 +130,11 @@ func (b *Builder) createTarGz(outputPath string, totalSize int64, fileCount int)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to create archive file: %w", err)
 	}
+	fileClosed := false
 	defer func() {
+		if fileClosed {
+			return
+		}
 		if err := outFile.Close(); err != nil {
 			log.Printf("Error closing output file: %v", err)
 		}
@@ -140,25 +144,19 @@ func (b *Builder) createTarGz(outputPath string, totalSize int64, fileCount int)
 	hasher := sha256.New()
 	multiWriter := io.MultiWriter(outFile, hasher)
 
-	// Create gzip writer if compression is enabled
-	var archiveWriter = multiWriter
+	// Create gzip writer if compression is enabled. The hasher sits beneath
+	// gzip so it sees the final on-disk bytes, including the gzip/tar footers
+	// emitted on Close — otherwise the recorded hash covers only a prefix of
+	// the file and never matches what backends compute after upload.
+	var archiveWriter io.Writer = multiWriter
+	var gzipWriter *gzip.Writer
 	if b.Options.Compression == "gzip" || b.Options.Compression == "" {
-		gzipWriter := gzip.NewWriter(multiWriter)
-		defer func() {
-			if err := gzipWriter.Close(); err != nil {
-				log.Printf("Error closing gzip writer: %v", err)
-			}
-		}()
+		gzipWriter = gzip.NewWriter(multiWriter)
 		archiveWriter = gzipWriter
 	}
 
 	// Create tar writer
 	tarWriter := tar.NewWriter(archiveWriter)
-	defer func() {
-		if err := tarWriter.Close(); err != nil {
-			log.Printf("Error closing tar writer: %v", err)
-		}
-	}()
 
 	// Track progress
 	var bytesProcessed int64
@@ -221,11 +219,30 @@ func (b *Builder) createTarGz(outputPath string, totalSize int64, fileCount int)
 		return "", 0, fmt.Errorf("failed to create archive: %w", err)
 	}
 
+	// Flush writers in order (tar → gzip → file) so the hasher sees every
+	// trailing byte before we read the digest.
+	if err := tarWriter.Close(); err != nil {
+		return "", 0, fmt.Errorf("failed to close tar writer: %w", err)
+	}
+	if gzipWriter != nil {
+		if err := gzipWriter.Close(); err != nil {
+			return "", 0, fmt.Errorf("failed to close gzip writer: %w", err)
+		}
+	}
+	if err := outFile.Sync(); err != nil {
+		return "", 0, fmt.Errorf("failed to sync archive: %w", err)
+	}
+
 	// Get file size
 	stat, err := outFile.Stat()
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to stat archive: %w", err)
 	}
+
+	if err := outFile.Close(); err != nil {
+		return "", 0, fmt.Errorf("failed to close archive: %w", err)
+	}
+	fileClosed = true
 
 	// Calculate hash
 	hashBytes := hasher.Sum(nil)
