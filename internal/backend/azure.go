@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/nsilverman/archivist/internal/models"
 )
@@ -131,13 +133,24 @@ func (b *AzureBackend) Upload(ctx context.Context, localPath string, remotePath 
 		callback: progress,
 	}
 
-	// Configure upload options
+	// Recorded as the blob's Content-MD5 so chunked uploads still expose a
+	// usable hash for skip-on-unchanged comparisons.
+	md5Hex, err := ComputeFileHash(localPath, "md5")
+	if err != nil {
+		log.Printf("warning: failed to pre-compute MD5 for %s: %v", localPath, err)
+	}
+
 	uploadOptions := &azblob.UploadStreamOptions{}
 	if b.storageTier != nil {
 		uploadOptions.AccessTier = b.storageTier
 	}
+	if md5Hex != "" {
+		md5Bytes, decErr := hex.DecodeString(md5Hex)
+		if decErr == nil {
+			uploadOptions.HTTPHeaders = &blob.HTTPHeaders{BlobContentMD5: md5Bytes}
+		}
+	}
 
-	// Upload to blob
 	_, err = b.client.UploadStream(ctx, b.container, blobName, progressReader, uploadOptions)
 	if err != nil {
 		return fmt.Errorf("failed to upload to Azure: %w", err)
@@ -171,19 +184,23 @@ func (b *AzureBackend) List(ctx context.Context, prefix string) ([]BackupInfo, e
 			return nil, fmt.Errorf("failed to list blobs: %w", err)
 		}
 
-		for _, blob := range page.Segment.BlobItems {
+		for _, item := range page.Segment.BlobItems {
 			// Remove backend prefix from path for display
-			displayPath := *blob.Name
+			displayPath := *item.Name
 			if b.prefix != "" && len(displayPath) > len(b.prefix)+1 {
 				displayPath = displayPath[len(b.prefix)+1:]
 			}
 
-			backups = append(backups, BackupInfo{
+			bi := BackupInfo{
 				Path:         displayPath,
-				Size:         *blob.Properties.ContentLength,
-				LastModified: blob.Properties.LastModified.Format(time.RFC3339),
-				Hash:         "", // Azure uses different hash format
-			})
+				Size:         *item.Properties.ContentLength,
+				LastModified: item.Properties.LastModified.Format(time.RFC3339),
+			}
+			if len(item.Properties.ContentMD5) > 0 {
+				bi.Hash = hex.EncodeToString(item.Properties.ContentMD5)
+				bi.HashAlgo = "md5"
+			}
+			backups = append(backups, bi)
 		}
 	}
 
@@ -233,6 +250,26 @@ func (b *AzureBackend) GetUsage(ctx context.Context) (*models.StorageUsage, erro
 		Used:  totalSize,
 		Total: -1, // Azure has no fixed limit
 	}, nil
+}
+
+func (b *AzureBackend) RemoteHash(ctx context.Context, remotePath string) (string, string, error) {
+	blobName := remotePath
+	if b.prefix != "" {
+		blobName = b.prefix + "/" + remotePath
+	}
+
+	blobClient := b.client.ServiceClient().NewContainerClient(b.container).NewBlobClient(blobName)
+	props, err := blobClient.GetProperties(ctx, nil)
+	if err != nil {
+		if bloberror.HasCode(err, bloberror.BlobNotFound) {
+			return "", "", ErrRemoteObjectNotFound
+		}
+		return "", "", fmt.Errorf("failed to get blob properties: %w", err)
+	}
+	if len(props.ContentMD5) == 0 {
+		return "", "", nil
+	}
+	return "md5", hex.EncodeToString(props.ContentMD5), nil
 }
 
 // Close closes the backend connection

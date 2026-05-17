@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nsilverman/archivist/internal/models"
@@ -186,7 +187,7 @@ func (b *GDriveBackend) List(ctx context.Context, prefix string) ([]BackupInfo, 
 		call := b.service.Files.List().
 			Q(query).
 			Spaces("drive").
-			Fields("nextPageToken, files(id, name, size, modifiedTime)").
+			Fields("nextPageToken, files(id, name, size, modifiedTime, md5Checksum)").
 			PageSize(100).
 			Context(ctx)
 
@@ -201,12 +202,16 @@ func (b *GDriveBackend) List(ctx context.Context, prefix string) ([]BackupInfo, 
 
 		for _, file := range r.Files {
 			modTime, _ := time.Parse(time.RFC3339, file.ModifiedTime)
-			backups = append(backups, BackupInfo{
+			bi := BackupInfo{
 				Path:         file.Name,
 				Size:         file.Size,
 				LastModified: modTime.Format(time.RFC3339),
-				Hash:         file.Md5Checksum,
-			})
+			}
+			if file.Md5Checksum != "" {
+				bi.Hash = strings.ToLower(file.Md5Checksum)
+				bi.HashAlgo = "md5"
+			}
+			backups = append(backups, bi)
 		}
 
 		pageToken = r.NextPageToken
@@ -287,6 +292,23 @@ func (b *GDriveBackend) GetUsage(ctx context.Context) (*models.StorageUsage, err
 		Used:  totalSize,
 		Total: about.StorageQuota.Limit,
 	}, nil
+}
+
+func (b *GDriveBackend) RemoteHash(ctx context.Context, remotePath string) (string, string, error) {
+	fileName := filepath.Base(remotePath)
+	query := fmt.Sprintf("name='%s' and '%s' in parents and trashed=false", fileName, b.folderID)
+	r, err := b.service.Files.List().Q(query).Spaces("drive").Fields("files(id, md5Checksum)").Context(ctx).Do()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to look up Drive file: %w", err)
+	}
+	if len(r.Files) == 0 {
+		return "", "", ErrRemoteObjectNotFound
+	}
+	md5 := r.Files[0].Md5Checksum
+	if md5 == "" {
+		return "", "", nil
+	}
+	return "md5", strings.ToLower(md5), nil
 }
 
 // Close closes the backend connection

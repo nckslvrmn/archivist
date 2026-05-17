@@ -129,9 +129,11 @@ func (e *Executor) Execute(taskID string) (string, error) {
 				execution.ErrorMessage = fmt.Sprintf("internal error: %v", r)
 				now := time.Now()
 				execution.CompletedAt = &now
+				execution.DurationMs = time.Since(execution.StartedAt).Milliseconds()
 				if dbErr := e.db.UpdateExecution(execution); dbErr != nil {
 					log.Printf("failed to update execution after panic: %v", dbErr)
 				}
+				e.broadcastExecutionFailed(execution)
 			}
 		}()
 
@@ -202,9 +204,7 @@ func (e *Executor) dryRunArchive(task *models.Task, sourcePath string, result *m
 	}
 	result.FilesSummary = *summary
 
-	// Generate archive name
-	builder := archive.NewBuilder(sourcePath, "", task.ArchiveOptions, nil)
-	archiveName, err := builder.GenerateFilename(task.Name)
+	archiveName, err := archive.GenerateFilename(task.Name, task.ArchiveOptions)
 	if err != nil {
 		return fmt.Errorf("failed to generate archive name: %w", err)
 	}
@@ -396,9 +396,7 @@ func (e *Executor) analyzeBackends(task *models.Task, backendIDs []string) []mod
 		if task.ArchiveOptions.Format == "sync" {
 			plan.RemotePath = task.Name
 		} else {
-			// Would be the archive filename
-			builder := archive.NewBuilder("", "", task.ArchiveOptions, nil)
-			filename, _ := builder.GenerateFilename(task.Name)
+			filename, _ := archive.GenerateFilename(task.Name, task.ArchiveOptions)
 			plan.RemotePath = filename
 		}
 
@@ -487,20 +485,18 @@ func (e *Executor) runExecution(ctx context.Context, task *models.Task, executio
 		}
 	}()
 
-	// Upload to all configured backends
+	// Upload to all configured backends concurrently (bounded by settings).
 	log.Printf("Uploading to %d backend(s)", len(task.BackendIDs))
-	var backendResults []models.BackendResult
+	backendResults := e.runBackendsParallel(task.BackendIDs, func(backendID string) models.BackendResult {
+		return e.uploadToBackend(ctx, backendID, task, archivePath, execution)
+	})
+
 	var uploadErrors []error
-
-	for _, backendID := range task.BackendIDs {
-		result := e.uploadToBackend(ctx, backendID, task, archivePath, execution)
-		backendResults = append(backendResults, result)
-
-		// Store backend upload result
+	for i := range backendResults {
+		result := backendResults[i]
 		if dbErr := e.db.AddBackendUpload(execution.ID, &result); dbErr != nil {
 			log.Printf("Error adding backend upload: %v", dbErr)
 		}
-
 		if result.Status == "failed" {
 			uploadErrors = append(uploadErrors, fmt.Errorf("backend %s: %s", result.BackendName, result.ErrorMessage))
 		}
@@ -571,20 +567,18 @@ func (e *Executor) runExecution(ctx context.Context, task *models.Task, executio
 func (e *Executor) runSyncExecution(ctx context.Context, task *models.Task, execution *models.Execution, sourcePath string, startTime time.Time) error {
 	log.Printf("Starting sync for task: %s (source: %s)", task.Name, sourcePath)
 
-	// Sync to all configured backends
-	var backendResults []models.BackendResult
+	// Sync to all configured backends concurrently (bounded by settings).
+	backendResults := e.runBackendsParallel(task.BackendIDs, func(backendID string) models.BackendResult {
+		return e.syncToBackend(ctx, backendID, task, sourcePath, execution)
+	})
+
 	var syncErrors []error
 	var totalBytesUploaded int64
-
-	for _, backendID := range task.BackendIDs {
-		result := e.syncToBackend(ctx, backendID, task, sourcePath, execution)
-		backendResults = append(backendResults, result)
-
-		// Store backend upload result
+	for i := range backendResults {
+		result := backendResults[i]
 		if dbErr := e.db.AddBackendUpload(execution.ID, &result); dbErr != nil {
 			log.Printf("Error adding backend upload: %v", dbErr)
 		}
-
 		if result.Status == "failed" {
 			syncErrors = append(syncErrors, fmt.Errorf("backend %s: %s", result.BackendName, result.ErrorMessage))
 		} else {
@@ -780,9 +774,24 @@ func (e *Executor) uploadToBackend(ctx context.Context, backendID string, task *
 	// Generate remote path (base filename only - backends handle their own prefixes)
 	remotePath := filepath.Base(archivePath)
 
-	// Upload with progress
+	// Skip upload when the most recent prior archive for this task is byte-identical.
+	// Archive filenames are timestamped, so we compare to the latest match rather
+	// than to remotePath (which only collides on same-second retries).
+	if priorPath, matched, checkErr := e.priorArchiveMatches(ctx, backendInstance, task, execution); checkErr != nil {
+		log.Printf("hash check failed on %s: %v (continuing with upload)", backendCfg.Name, checkErr)
+	} else if matched {
+		log.Printf("Skipping upload to %s: content matches prior archive %s", backendCfg.Name, priorPath)
+		now := time.Now()
+		result.Status = "skipped_unchanged"
+		result.UploadedAt = &now
+		result.Size = execution.ArchiveSize
+		result.RemotePath = priorPath
+		return result
+	}
+
+	// Upload with progress, retrying transient failures.
 	log.Printf("Uploading to backend: %s", backendCfg.Name)
-	err = backendInstance.Upload(ctx, archivePath, remotePath, func(uploaded, total int64) {
+	err = backend.UploadWithRetry(ctx, backendInstance, archivePath, remotePath, func(uploaded, total int64) {
 		e.broadcastEvent(models.ProgressEvent{
 			Type: "upload_progress",
 			Data: models.UploadProgress{
@@ -794,12 +803,32 @@ func (e *Executor) uploadToBackend(ctx context.Context, backendID string, task *
 				BytesTotal:      total,
 			},
 		})
-	})
+	}, backend.DefaultUploadRetry)
 
 	if err != nil {
 		result.Status = "failed"
 		result.ErrorMessage = err.Error()
 		return result
+	}
+
+	// Post-upload integrity check: re-fetch the remote hash and compare to the
+	// hash we computed while streaming the archive. Skips silently when the
+	// backend doesn't expose a comparable hash.
+	if algo, hexDigest, ok := splitArchiveHash(execution.ArchiveHash); ok {
+		matched, reason, verr := backend.RemoteMatchesHash(ctx, backendInstance, remotePath, algo, hexDigest)
+		switch {
+		case verr != nil:
+			log.Printf("integrity check error on %s for %s: %v", backendCfg.Name, remotePath, verr)
+		case reason == backend.MatchDiffers:
+			result.Status = "failed"
+			result.ErrorMessage = fmt.Sprintf("integrity check failed: remote hash does not match local (%s)", algo)
+			log.Printf("integrity check FAILED on %s for %s", backendCfg.Name, remotePath)
+			return result
+		case matched:
+			log.Printf("integrity check passed on %s for %s (%s)", backendCfg.Name, remotePath, algo)
+		default:
+			log.Printf("integrity check skipped on %s for %s: %s", backendCfg.Name, remotePath, reason)
+		}
 	}
 
 	// Success
@@ -811,6 +840,85 @@ func (e *Executor) uploadToBackend(ctx context.Context, backendID string, task *
 
 	log.Printf("Successfully uploaded to backend: %s", backendCfg.Name)
 	return result
+}
+
+// runBackendsParallel fans out per-backend work with a concurrency cap from
+// settings (MaxConcurrentBackends). Results preserve the order of backendIDs.
+func (e *Executor) runBackendsParallel(backendIDs []string, work func(backendID string) models.BackendResult) []models.BackendResult {
+	results := make([]models.BackendResult, len(backendIDs))
+	if len(backendIDs) == 0 {
+		return results
+	}
+
+	cap := e.config.GetSettings().MaxConcurrentBackends
+	if cap <= 0 || cap > len(backendIDs) {
+		cap = len(backendIDs)
+	}
+
+	sem := make(chan struct{}, cap)
+	var wg sync.WaitGroup
+	for i, id := range backendIDs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int, backendID string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			results[idx] = work(backendID)
+		}(i, id)
+	}
+	wg.Wait()
+	return results
+}
+
+// priorArchiveMatches looks for the most recent prior archive produced by
+// this task on the given backend and compares its remote hash to the current
+// execution's archive hash. Returns the remote path that matched, whether it
+// matched, and any non-fatal error encountered.
+func (e *Executor) priorArchiveMatches(ctx context.Context, b backend.StorageBackend, task *models.Task, execution *models.Execution) (string, bool, error) {
+	algo, hexDigest, ok := splitArchiveHash(execution.ArchiveHash)
+	if !ok {
+		return "", false, nil
+	}
+
+	// List a wide enough prefix to catch all prior archives for this task.
+	files, err := b.List(ctx, "")
+	if err != nil {
+		return "", false, err
+	}
+
+	taskPrefix := archive.SanitizeTaskName(task.Name) + "_"
+	ext := archive.ArchiveExtension(task.ArchiveOptions)
+	var candidates []backend.BackupInfo
+	for _, f := range files {
+		fileName := filepath.Base(f.Path)
+		if strings.HasPrefix(fileName, taskPrefix) && strings.HasSuffix(fileName, ext) {
+			candidates = append(candidates, f)
+		}
+	}
+	if len(candidates) == 0 {
+		return "", false, nil
+	}
+
+	// Pick newest by LastModified (RFC3339 sorts lexicographically).
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].LastModified > candidates[j].LastModified
+	})
+	newest := candidates[0]
+
+	matched, _, err := backend.RemoteMatchesHash(ctx, b, newest.Path, algo, hexDigest)
+	if err != nil {
+		return "", false, err
+	}
+	return newest.Path, matched, nil
+}
+
+// splitArchiveHash parses the "<algo>:<hex>" form produced by archive.Builder.
+func splitArchiveHash(s string) (algo, hex string, ok bool) {
+	idx := strings.IndexByte(s, ':')
+	if idx <= 0 || idx == len(s)-1 {
+		return "", "", false
+	}
+	return s[:idx], s[idx+1:], true
 }
 
 // applyRetentionPolicy removes old backups according to retention policy
@@ -848,24 +956,25 @@ func (e *Executor) applyRetentionPolicy(ctx context.Context, task *models.Task, 
 			continue
 		}
 
-		// Filter to only include files matching this task's backup pattern
-		// Backup files follow pattern: <taskname>_YYYYMMDD_HHMMSS.tar.gz
+		// Filter to only include files produced by this task. Filenames
+		// follow archive.GenerateFilename: <sanitized-task>_<timestamp><ext>.
+		taskPrefix := archive.SanitizeTaskName(task.Name) + "_"
+		ext := archive.ArchiveExtension(task.ArchiveOptions)
 		var backups []backend.BackupInfo
-		taskPrefix := task.Name + "_"
 		for _, file := range allFiles {
 			fileName := filepath.Base(file.Path)
-			// Only consider files that start with task name and end with .tar.gz
-			if len(fileName) > len(taskPrefix) &&
-				fileName[:len(taskPrefix)] == taskPrefix &&
-				filepath.Ext(fileName) == ".gz" {
+			if strings.HasPrefix(fileName, taskPrefix) && strings.HasSuffix(fileName, ext) {
 				backups = append(backups, file)
 			}
 		}
 
-		// If we have more than KeepLast, delete oldest
+		// Sort oldest-first so the leading slice contains the deletion targets.
+		// LastModified is RFC3339; lexicographic compare is monotonic.
+		sort.Slice(backups, func(i, j int) bool {
+			return backups[i].LastModified < backups[j].LastModified
+		})
+
 		if len(backups) > task.RetentionPolicy.KeepLast {
-			// Sort by last modified (oldest first)
-			// For now, delete excess backups
 			toDelete := len(backups) - task.RetentionPolicy.KeepLast
 			for i := 0; i < toDelete; i++ {
 				if err := backendInstance.Delete(ctx, backups[i].Path); err != nil {

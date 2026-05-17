@@ -106,10 +106,11 @@ func (m *Manager) CreateDefaultWithPaths(tempDir, sourcesDir string) error {
 		Backends: []models.Backend{},
 		Tasks:    []models.Task{},
 		Settings: models.Settings{
-			TempDir:            tempDir,
-			SourcesDir:         sourcesDir,
-			MaxConcurrentTasks: 3,
-			LogLevel:           "info",
+			TempDir:               tempDir,
+			SourcesDir:            sourcesDir,
+			MaxConcurrentTasks:    3,
+			MaxConcurrentBackends: 4,
+			LogLevel:              "info",
 		},
 	}
 

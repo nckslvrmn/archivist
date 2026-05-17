@@ -2,6 +2,8 @@ package backend
 
 import (
 	"context"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -177,12 +179,16 @@ func (b *GCSBackend) List(ctx context.Context, prefix string) ([]BackupInfo, err
 			displayPath = displayPath[len(b.prefix)+1:]
 		}
 
-		backups = append(backups, BackupInfo{
+		bi := BackupInfo{
 			Path:         displayPath,
 			Size:         attrs.Size,
 			LastModified: attrs.Updated.Format(time.RFC3339),
-			Hash:         fmt.Sprintf("md5:%x", attrs.MD5),
-		})
+		}
+		if len(attrs.MD5) > 0 {
+			bi.Hash = hex.EncodeToString(attrs.MD5)
+			bi.HashAlgo = "md5"
+		}
+		backups = append(backups, bi)
 	}
 
 	return backups, nil
@@ -230,6 +236,25 @@ func (b *GCSBackend) GetUsage(ctx context.Context) (*models.StorageUsage, error)
 		Used:  totalSize,
 		Total: -1, // GCS has no fixed limit
 	}, nil
+}
+
+func (b *GCSBackend) RemoteHash(ctx context.Context, remotePath string) (string, string, error) {
+	key := remotePath
+	if b.prefix != "" {
+		key = b.prefix + "/" + remotePath
+	}
+
+	attrs, err := b.client.Bucket(b.bucket).Object(key).Attrs(ctx)
+	if err != nil {
+		if errors.Is(err, storage.ErrObjectNotExist) {
+			return "", "", ErrRemoteObjectNotFound
+		}
+		return "", "", fmt.Errorf("failed to get GCS object attrs: %w", err)
+	}
+	if len(attrs.MD5) == 0 {
+		return "", "", nil
+	}
+	return "md5", hex.EncodeToString(attrs.MD5), nil
 }
 
 // Close closes the backend connection

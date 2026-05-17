@@ -68,10 +68,11 @@ type RetentionPolicy struct {
 
 // Settings represents application settings
 type Settings struct {
-	TempDir            string `json:"temp_dir"`
-	SourcesDir         string `json:"sources_dir"`
-	MaxConcurrentTasks int    `json:"max_concurrent_tasks"`
-	LogLevel           string `json:"log_level"`
+	TempDir               string `json:"temp_dir"`
+	SourcesDir            string `json:"sources_dir"`
+	MaxConcurrentTasks    int    `json:"max_concurrent_tasks"`
+	MaxConcurrentBackends int    `json:"max_concurrent_backends"` // Per-task fan-out cap; 0 = unlimited.
+	LogLevel              string `json:"log_level"`
 }
 
 // Execution represents a backup task execution record
@@ -93,7 +94,7 @@ type Execution struct {
 type BackendResult struct {
 	BackendID    string     `json:"backend_id"`
 	BackendName  string     `json:"backend_name"`
-	Status       string     `json:"status"` // success, failed
+	Status       string     `json:"status"` // success, failed, skipped_unchanged
 	UploadedAt   *time.Time `json:"uploaded_at,omitempty"`
 	Size         int64      `json:"size,omitempty"`
 	RemotePath   string     `json:"remote_path,omitempty"`

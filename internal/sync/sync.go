@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nsilverman/archivist/internal/backend"
@@ -116,7 +117,7 @@ func (s *Syncer) Sync(ctx context.Context) (*SyncResult, error) {
 				// Could report per-file progress here if needed
 			}
 
-			err := s.Backend.Upload(ctx, localFile.Path, remotePath, uploadProgress)
+			err := backend.UploadWithRetry(ctx, s.Backend, localFile.Path, remotePath, uploadProgress, backend.DefaultUploadRetry)
 			if err != nil {
 				result.Errors = append(result.Errors, fmt.Errorf("failed to upload %s: %w", localFile.RelativePath, err))
 			} else {
@@ -223,12 +224,25 @@ func (s *Syncer) DryRun(ctx context.Context) (*models.SyncDetails, error) {
 	return details, nil
 }
 
-// getUploadReason explains why a file would be uploaded
+// getUploadReason explains why a file would be uploaded. Mirrors the
+// decision tree in needsUpload so dry-run output cannot disagree with the
+// actual sync behaviour.
 func (s *Syncer) getUploadReason(local FileInfo, remote backend.BackupInfo) string {
 	if local.Size != remote.Size {
 		return "Size changed"
 	}
-
+	if remote.HashAlgo != "" && remote.Hash != "" {
+		if localHex, err := backend.ComputeFileHash(local.Path, remote.HashAlgo); err == nil {
+			if !strings.EqualFold(localHex, remote.Hash) {
+				return "Content hash differs"
+			}
+			// Hash matched — caller only invokes us when needsUpload is true,
+			// which in this branch means mtime-newer fallback fired.
+			return "Modified timestamp newer"
+		}
+		// Hash compute failed; needsUpload fell back to mtime.
+		return "Modified timestamp newer (hash unavailable)"
+	}
 	return "Modified timestamp newer"
 }
 
@@ -271,21 +285,30 @@ func (s *Syncer) listRemoteFiles(ctx context.Context) ([]backend.BackupInfo, err
 	return s.Backend.List(ctx, s.RemotePath)
 }
 
-// needsUpload determines if a file needs to be uploaded based on size and modification time
+// needsUpload prefers a remote-side content hash when the backend exposes
+// one; otherwise it falls back to size + mtime.
 func (s *Syncer) needsUpload(local FileInfo, remote backend.BackupInfo) bool {
-	// Compare size first (fast check)
 	if local.Size != remote.Size {
 		return true
 	}
 
-	// Parse remote modification time
-	remoteModTime, err := time.Parse(time.RFC3339, remote.LastModified)
-	if err != nil {
-		// If we can't parse time, assume unchanged since size matches
-		return false
+	if remote.HashAlgo != "" && remote.Hash != "" {
+		localHex, err := backend.ComputeFileHash(local.Path, remote.HashAlgo)
+		if err != nil {
+			return s.mtimeNewer(local, remote)
+		}
+		return !strings.EqualFold(localHex, remote.Hash)
 	}
 
-	// Upload if local is newer (with 1 second tolerance for filesystem differences)
+	return s.mtimeNewer(local, remote)
+}
+
+func (s *Syncer) mtimeNewer(local FileInfo, remote backend.BackupInfo) bool {
+	remoteModTime, err := time.Parse(time.RFC3339, remote.LastModified)
+	if err != nil {
+		return false
+	}
+	// 1s tolerance accounts for filesystem mtime resolution differences.
 	return local.ModTime.After(remoteModTime.Add(time.Second))
 }
 

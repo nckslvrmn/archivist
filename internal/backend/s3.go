@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,19 +13,20 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	tmtypes "github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/nsilverman/archivist/internal/models"
 )
 
 // S3Backend stores backups on AWS S3 or S3-compatible storage
 type S3Backend struct {
 	client      *s3.Client
-	uploader    *manager.Uploader
+	uploader    *transfermanager.Client
 	bucket      string
 	prefix      string
-	storageTier types.StorageClass
+	storageTier tmtypes.StorageClass
 }
 
 // Initialize sets up the S3 backend
@@ -86,7 +88,7 @@ func (b *S3Backend) Initialize(cfg map[string]interface{}, pathResolver PathReso
 	}
 
 	// Create uploader for efficient multipart uploads
-	b.uploader = manager.NewUploader(b.client)
+	b.uploader = transfermanager.New(b.client)
 
 	// Extract and validate storage tier (optional)
 	if storageTierStr, ok := cfg["storage_tier"].(string); ok && storageTierStr != "" {
@@ -97,7 +99,7 @@ func (b *S3Backend) Initialize(cfg map[string]interface{}, pathResolver PathReso
 		b.storageTier = storageTier
 	} else {
 		// Default to STANDARD
-		b.storageTier = types.StorageClassStandard
+		b.storageTier = tmtypes.StorageClassStandard
 	}
 
 	return nil
@@ -121,7 +123,13 @@ func (b *S3Backend) Test() error {
 
 // Upload uploads a file to S3
 func (b *S3Backend) Upload(ctx context.Context, localPath string, remotePath string, progress ProgressCallback) error {
-	// Open local file
+	// Stored as x-amz-meta-sha256 so subsequent uploads can skip when content
+	// is unchanged — multipart ETags aren't comparable.
+	sha256Hex, hashErr := ComputeFileHash(localPath, "sha256")
+	if hashErr != nil {
+		log.Printf("warning: failed to pre-compute SHA256 for %s: %v", localPath, hashErr)
+	}
+
 	file, err := os.Open(localPath)
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
@@ -132,35 +140,36 @@ func (b *S3Backend) Upload(ctx context.Context, localPath string, remotePath str
 		}
 	}()
 
-	// Get file size for progress reporting
 	stat, err := file.Stat()
 	if err != nil {
 		return fmt.Errorf("failed to stat file: %w", err)
 	}
 	fileSize := stat.Size()
 
-	// Add prefix if configured
 	key := remotePath
 	if b.prefix != "" {
 		key = b.prefix + "/" + remotePath
 	}
 
-	// Create a progress reader
 	progressReader := &progressReader{
 		reader:   file,
 		size:     fileSize,
 		callback: progress,
 	}
 
-	// Upload with multipart support
-	_, err = b.uploader.Upload(ctx, &s3.PutObjectInput{
-		Bucket:       aws.String(b.bucket),
-		Key:          aws.String(key),
-		Body:         progressReader,
-		StorageClass: b.storageTier,
-	})
+	input := &transfermanager.UploadObjectInput{
+		Bucket: aws.String(b.bucket),
+		Key:    aws.String(key),
+		Body:   progressReader,
+		// Lets transfermanager auto-size parts so objects > 80 GiB don't exceed the 10,000-part limit.
+		ContentLength: aws.Int64(fileSize),
+		StorageClass:  b.storageTier,
+	}
+	if sha256Hex != "" {
+		input.Metadata = map[string]string{"sha256": sha256Hex}
+	}
 
-	if err != nil {
+	if _, err = b.uploader.UploadObject(ctx, input); err != nil {
 		return fmt.Errorf("failed to upload to S3: %w", err)
 	}
 
@@ -198,12 +207,18 @@ func (b *S3Backend) List(ctx context.Context, prefix string) ([]BackupInfo, erro
 				displayPath = displayPath[len(b.prefix)+1:]
 			}
 
-			backups = append(backups, BackupInfo{
+			bi := BackupInfo{
 				Path:         displayPath,
 				Size:         *obj.Size,
 				LastModified: obj.LastModified.Format(time.RFC3339),
-				Hash:         "", // S3 ETag is not a standard hash
-			})
+			}
+			if obj.ETag != nil {
+				if md5, ok := parseSingleUploadETag(*obj.ETag); ok {
+					bi.Hash = md5
+					bi.HashAlgo = "md5"
+				}
+			}
+			backups = append(backups, bi)
 		}
 	}
 
@@ -258,6 +273,58 @@ func (b *S3Backend) GetUsage(ctx context.Context) (*models.StorageUsage, error) 
 	}, nil
 }
 
+// RemoteHash prefers the x-amz-meta-sha256 metadata set by Upload (works for
+// multipart objects) and falls back to the ETag MD5 for single-part objects.
+func (b *S3Backend) RemoteHash(ctx context.Context, remotePath string) (string, string, error) {
+	key := remotePath
+	if b.prefix != "" {
+		key = b.prefix + "/" + remotePath
+	}
+
+	out, err := b.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(b.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		var nf *s3types.NotFound
+		if errors.As(err, &nf) {
+			return "", "", ErrRemoteObjectNotFound
+		}
+		// S3-compatible servers vary in how they signal 404 — fall back to string match.
+		es := err.Error()
+		if strings.Contains(es, "NotFound") || strings.Contains(es, "NoSuchKey") || strings.Contains(es, "status code: 404") {
+			return "", "", ErrRemoteObjectNotFound
+		}
+		return "", "", fmt.Errorf("failed to head S3 object: %w", err)
+	}
+
+	for k, v := range out.Metadata {
+		if strings.EqualFold(k, "sha256") && v != "" {
+			return "sha256", strings.ToLower(v), nil
+		}
+	}
+	if out.ETag != nil {
+		if md5, ok := parseSingleUploadETag(*out.ETag); ok {
+			return "md5", md5, nil
+		}
+	}
+	return "", "", nil
+}
+
+// parseSingleUploadETag returns the MD5 hex from an S3 ETag, or (_, false)
+// if the ETag is from a multipart upload (suffixed with -N).
+func parseSingleUploadETag(etag string) (string, bool) {
+	etag = strings.Trim(etag, "\"")
+	if etag == "" || strings.Contains(etag, "-") {
+		return "", false
+	}
+	// MD5 is 32 hex chars
+	if len(etag) != 32 {
+		return "", false
+	}
+	return strings.ToLower(etag), true
+}
+
 // Close closes the backend connection
 func (b *S3Backend) Close() error {
 	// S3 client doesn't need explicit cleanup
@@ -284,17 +351,17 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 }
 
 // validateS3StorageClass validates and returns the S3 storage class
-func validateS3StorageClass(tier string) (types.StorageClass, error) {
+func validateS3StorageClass(tier string) (tmtypes.StorageClass, error) {
 	tier = strings.ToUpper(tier)
-	valid := map[string]types.StorageClass{
-		"STANDARD":            types.StorageClassStandard,
-		"REDUCED_REDUNDANCY":  types.StorageClassReducedRedundancy,
-		"STANDARD_IA":         types.StorageClassStandardIa,
-		"ONEZONE_IA":          types.StorageClassOnezoneIa,
-		"INTELLIGENT_TIERING": types.StorageClassIntelligentTiering,
-		"GLACIER":             types.StorageClassGlacier,
-		"GLACIER_IR":          types.StorageClassGlacierIr,
-		"DEEP_ARCHIVE":        types.StorageClassDeepArchive,
+	valid := map[string]tmtypes.StorageClass{
+		"STANDARD":            tmtypes.StorageClassStandard,
+		"REDUCED_REDUNDANCY":  tmtypes.StorageClassReducedRedundancy,
+		"STANDARD_IA":         tmtypes.StorageClassStandardIa,
+		"ONEZONE_IA":          tmtypes.StorageClassOnezoneIa,
+		"INTELLIGENT_TIERING": tmtypes.StorageClassIntelligentTiering,
+		"GLACIER":             tmtypes.StorageClassGlacier,
+		"GLACIER_IR":          tmtypes.StorageClassGlacierIr,
+		"DEEP_ARCHIVE":        tmtypes.StorageClassDeepArchive,
 	}
 	if sc, ok := valid[tier]; ok {
 		return sc, nil

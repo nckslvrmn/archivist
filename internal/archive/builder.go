@@ -39,7 +39,7 @@ func NewBuilder(sourcePath, outputDir string, options models.ArchiveOptions, pro
 // Build creates the archive and returns the path and hash
 func (b *Builder) Build(taskName string) (archivePath string, hash string, size int64, err error) {
 	// Generate filename from pattern
-	filename, err := b.GenerateFilename(taskName)
+	filename, err := GenerateFilename(taskName, b.Options)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("failed to generate filename: %w", err)
 	}
@@ -72,44 +72,55 @@ func (b *Builder) Build(taskName string) (archivePath string, hash string, size 
 	return archivePath, hash, size, nil
 }
 
-// GenerateFilename creates the archive filename from the pattern
-func (b *Builder) GenerateFilename(taskName string) (string, error) {
-	pattern := b.Options.NamePattern
+// GenerateFilename produces an archive filename from the configured pattern.
+// Exposed at package scope so dry-run / planning code can derive the filename
+// without instantiating a Builder.
+func GenerateFilename(taskName string, opts models.ArchiveOptions) (string, error) {
+	pattern := opts.NamePattern
 	if pattern == "" {
-		// Default pattern
-		if b.Options.UseTimestamp {
+		if opts.UseTimestamp {
 			pattern = "{task}_{timestamp}.tar.gz"
 		} else {
 			pattern = "{task}_latest.tar.gz"
 		}
 	}
 
-	// Replace placeholders
 	filename := pattern
+	filename = strings.ReplaceAll(filename, "{task}", sanitizeFilename(taskName))
 
-	// Sanitize task name for filename
-	sanitizedTask := sanitizeFilename(taskName)
-	filename = strings.ReplaceAll(filename, "{task}", sanitizedTask)
-
-	// Replace timestamp if present
 	if strings.Contains(filename, "{timestamp}") {
-		if b.Options.UseTimestamp {
-			timestamp := time.Now().Format("20060102_150405")
-			filename = strings.ReplaceAll(filename, "{timestamp}", timestamp)
+		if opts.UseTimestamp {
+			filename = strings.ReplaceAll(filename, "{timestamp}", time.Now().Format("20060102_150405"))
 		} else {
-			// Remove timestamp placeholder if not using timestamps
 			filename = strings.ReplaceAll(filename, "_{timestamp}", "")
 			filename = strings.ReplaceAll(filename, "{timestamp}_", "")
 			filename = strings.ReplaceAll(filename, "{timestamp}", "")
 		}
 	}
 
-	// Ensure proper extension
 	if !strings.HasSuffix(filename, ".tar.gz") && !strings.HasSuffix(filename, ".tar") {
 		filename += ".tar.gz"
 	}
 
 	return filename, nil
+}
+
+// ArchiveExtension returns the on-disk extension produced for the given
+// archive options (e.g. ".tar.gz" or ".tar"). Used by retention to filter
+// candidate objects without re-parsing the filename pattern.
+func ArchiveExtension(opts models.ArchiveOptions) string {
+	if opts.NamePattern != "" {
+		if strings.HasSuffix(opts.NamePattern, ".tar.gz") {
+			return ".tar.gz"
+		}
+		if strings.HasSuffix(opts.NamePattern, ".tar") {
+			return ".tar"
+		}
+	}
+	if opts.Format == "tar" && opts.Compression == "none" {
+		return ".tar"
+	}
+	return ".tar.gz"
 }
 
 // createTarGz creates a tar.gz archive
@@ -236,6 +247,13 @@ func (b *Builder) calculateSize(path string) (totalSize int64, fileCount int, er
 		return nil
 	})
 	return
+}
+
+// SanitizeTaskName converts a task name to the form embedded in archive
+// filenames. Retention/matching code uses this to filter the listing back
+// down to objects produced by a specific task.
+func SanitizeTaskName(name string) string {
+	return sanitizeFilename(name)
 }
 
 // sanitizeFilename removes characters that aren't safe for filenames

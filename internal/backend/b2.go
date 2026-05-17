@@ -6,9 +6,10 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"time"
 
-	"github.com/kurin/blazer/b2"
+	"github.com/Backblaze/blazer/b2"
 	"github.com/nsilverman/archivist/internal/models"
 )
 
@@ -158,12 +159,16 @@ func (b *B2Backend) List(ctx context.Context, prefix string) ([]BackupInfo, erro
 			displayPath = displayPath[len(b.prefix)+1:]
 		}
 
-		backups = append(backups, BackupInfo{
+		bi := BackupInfo{
 			Path:         displayPath,
 			Size:         attrs.Size,
 			LastModified: attrs.UploadTimestamp.Format(time.RFC3339),
-			Hash:         attrs.SHA1,
-		})
+		}
+		if attrs.SHA1 != "" && attrs.SHA1 != "none" {
+			bi.Hash = strings.ToLower(attrs.SHA1)
+			bi.HashAlgo = "sha1"
+		}
+		backups = append(backups, bi)
 	}
 
 	if err := iter.Err(); err != nil {
@@ -215,6 +220,25 @@ func (b *B2Backend) GetUsage(ctx context.Context) (*models.StorageUsage, error) 
 		Used:  totalSize,
 		Total: -1, // B2 has no fixed limit
 	}, nil
+}
+
+func (b *B2Backend) RemoteHash(ctx context.Context, remotePath string) (string, string, error) {
+	fileName := remotePath
+	if b.prefix != "" {
+		fileName = b.prefix + "/" + remotePath
+	}
+
+	attrs, err := b.bucket.Object(fileName).Attrs(ctx)
+	if err != nil {
+		if b2.IsNotExist(err) {
+			return "", "", ErrRemoteObjectNotFound
+		}
+		return "", "", fmt.Errorf("failed to get B2 object attrs: %w", err)
+	}
+	if attrs.SHA1 == "" || attrs.SHA1 == "none" {
+		return "", "", nil
+	}
+	return "sha1", strings.ToLower(attrs.SHA1), nil
 }
 
 // Close closes the backend connection

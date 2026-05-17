@@ -82,6 +82,7 @@
         <div class="form-group" x-show="useTimestamp === 'true'">
             <label>Retention (Keep Last N Backups, 0 = unlimited)</label>
             <input type="number" name="keep_last" value="{{.Task.RetentionPolicy.KeepLast}}">
+            <small>Archive mode only. Sync mode is governed by "Delete Remote Files" below.</small>
         </div>
     </div>
 
@@ -94,6 +95,7 @@
                 <option value="true" {{if .Task.ArchiveOptions.SyncOptions.DeleteRemote}}selected{{end}}>Yes (True
                     mirror)</option>
             </select>
+            <small>Sync mode uses this instead of "Keep Last N" retention &mdash; the archive retention setting has no effect here.</small>
         </div>
     </div>
 
