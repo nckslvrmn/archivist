@@ -16,7 +16,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-sqlite3 v1.14.44
 	github.com/robfig/cron/v3 v3.0.1
-	google.golang.org/api v0.279.0
+	google.golang.org/api v0.280.0
 )
 
 require (
