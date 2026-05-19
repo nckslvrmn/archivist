@@ -3,7 +3,7 @@ module github.com/nsilverman/archivist
 go 1.26.0
 
 require (
-	cloud.google.com/go/storage v1.62.1
+	cloud.google.com/go/storage v1.62.2
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.7.0
 	github.com/Backblaze/blazer v0.7.2
 	github.com/aws/aws-sdk-go-v2 v1.41.7
