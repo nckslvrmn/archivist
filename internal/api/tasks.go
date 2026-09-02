@@ -67,20 +67,12 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse keep_last
-	keepLast := 0
-	if keepLastStr := r.FormValue("keep_last"); keepLastStr != "" {
-		if val, err := strconv.Atoi(keepLastStr); err == nil {
-			keepLast = val
-		}
-	}
+	// Parse retention limits
+	keepLast := formInt(r.FormValue("keep_last"))
+	keepDays := formInt(r.FormValue("keep_days"))
 
-	// Map backup mode to format
-	backupMode := r.FormValue("backup_mode")
-	format := "tar.gz" // default
-	if backupMode == "sync" {
-		format = "sync"
-	}
+	// Map backup mode and compression choice to a format
+	format, compression := archiveFormat(r.FormValue("backup_mode"), r.FormValue("compression"))
 
 	// Map form to Task model
 	task := models.Task{
@@ -95,14 +87,16 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		},
 		ArchiveOptions: models.ArchiveOptions{
 			Format:       format,
-			Compression:  "gzip",
+			Compression:  compression,
 			UseTimestamp: r.FormValue("use_timestamp") == "true",
 			SyncOptions: models.SyncOptions{
-				DeleteRemote: r.FormValue("delete_remote") == "true",
+				DeleteRemote:  r.FormValue("delete_remote") == "true",
+				CompareMethod: r.FormValue("compare_method"),
 			},
 		},
 		RetentionPolicy: models.RetentionPolicy{
 			KeepLast: keepLast,
+			KeepDays: keepDays,
 		},
 		Enabled: r.FormValue("enabled") == "true",
 	}
@@ -148,20 +142,12 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse keep_last
-	keepLast := 0
-	if keepLastStr := r.FormValue("keep_last"); keepLastStr != "" {
-		if val, err := strconv.Atoi(keepLastStr); err == nil {
-			keepLast = val
-		}
-	}
+	// Parse retention limits
+	keepLast := formInt(r.FormValue("keep_last"))
+	keepDays := formInt(r.FormValue("keep_days"))
 
-	// Map backup mode to format
-	backupMode := r.FormValue("backup_mode")
-	format := "tar.gz" // default
-	if backupMode == "sync" {
-		format = "sync"
-	}
+	// Map backup mode and compression choice to a format
+	format, compression := archiveFormat(r.FormValue("backup_mode"), r.FormValue("compression"))
 
 	// Map form to Task model
 	task := models.Task{
@@ -176,14 +162,16 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 		},
 		ArchiveOptions: models.ArchiveOptions{
 			Format:       format,
-			Compression:  "gzip",
+			Compression:  compression,
 			UseTimestamp: r.FormValue("use_timestamp") == "true",
 			SyncOptions: models.SyncOptions{
-				DeleteRemote: r.FormValue("delete_remote") == "true",
+				DeleteRemote:  r.FormValue("delete_remote") == "true",
+				CompareMethod: r.FormValue("compare_method"),
 			},
 		},
 		RetentionPolicy: models.RetentionPolicy{
 			KeepLast: keepLast,
+			KeepDays: keepDays,
 		},
 		Enabled: r.FormValue("enabled") == "true",
 	}
@@ -320,4 +308,35 @@ func (s *Server) disableTask(w http.ResponseWriter, r *http.Request) {
 		"id":      id,
 		"enabled": false,
 	})
+}
+
+// formInt parses an optional non-negative integer form field, returning 0
+// for an empty, malformed or negative value.
+func formInt(value string) int {
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return 0
+	}
+	return parsed
+}
+
+// archiveFormat maps the form's backup mode and compression choice onto the
+// Format/Compression pair the builder understands. Unknown values fall back
+// to gzip rather than failing the task, since compression is presentational
+// next to the backup itself.
+func archiveFormat(backupMode, compression string) (string, string) {
+	if backupMode == "sync" {
+		return "sync", ""
+	}
+	switch strings.ToLower(compression) {
+	case "zstd":
+		return "tar.zst", "zstd"
+	case "none":
+		return "tar", "none"
+	default:
+		return "tar.gz", "gzip"
+	}
 }

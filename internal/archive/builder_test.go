@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/nsilverman/archivist/internal/models"
 )
 
@@ -338,4 +339,138 @@ func keys(m map[string]entry) []string {
 func timeoutAfter(t *testing.T) <-chan time.Time {
 	t.Helper()
 	return time.After(10 * time.Second)
+}
+
+// TestArchiveFormats checks each supported compression produces a readable
+// archive with the extension retention filtering expects.
+func TestArchiveFormats(t *testing.T) {
+	cases := []struct {
+		name        string
+		format      string
+		compression string
+		wantExt     string
+	}{
+		{"gzip", "tar.gz", "gzip", ".tar.gz"},
+		{"zstd", "tar.zst", "zstd", ".tar.zst"},
+		{"none", "tar", "none", ".tar"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			src := filepath.Join(tmp, "src")
+			if err := os.MkdirAll(src, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(src, "f.txt"), []byte("payload"), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			opts := models.ArchiveOptions{Format: c.format, Compression: c.compression, UseTimestamp: true}
+			if got := ArchiveExtension(opts); got != c.wantExt {
+				t.Errorf("ArchiveExtension = %s, want %s", got, c.wantExt)
+			}
+
+			res, err := NewBuilder(src, filepath.Join(tmp, "out"), opts, nil).Build(context.Background(), "fmt")
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if !strings.HasSuffix(res.Path, c.wantExt) {
+				t.Errorf("archive path %s does not end in %s", res.Path, c.wantExt)
+			}
+
+			// The filename retention matches on must be the one produced.
+			name, err := GenerateFilename("fmt", opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasSuffix(name, ArchiveExtension(opts)) {
+				t.Errorf("GenerateFilename %s disagrees with ArchiveExtension %s", name, ArchiveExtension(opts))
+			}
+
+			body := readArchiveWith(t, res.Path, c.compression)
+			if body["f.txt"].body != "payload" {
+				t.Errorf("f.txt body = %q, want %q", body["f.txt"].body, "payload")
+			}
+		})
+	}
+}
+
+// readArchiveWith reads an archive compressed with the named algorithm.
+func readArchiveWith(t *testing.T, path, compression string) map[string]entry {
+	t.Helper()
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	defer f.Close()
+
+	var r io.Reader = f
+	switch compression {
+	case "gzip":
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			t.Fatalf("gzip reader: %v", err)
+		}
+		defer gz.Close()
+		r = gz
+	case "zstd":
+		zr, err := zstd.NewReader(f)
+		if err != nil {
+			t.Fatalf("zstd reader: %v", err)
+		}
+		defer zr.Close()
+		r = zr
+	}
+
+	entries := make(map[string]entry)
+	tr := tar.NewReader(r)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read tar entry: %v", err)
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries[hdr.Name] = entry{typeflag: hdr.Typeflag, linkname: hdr.Linkname, body: string(body), size: hdr.Size}
+	}
+	return entries
+}
+
+func TestSupportedFormat(t *testing.T) {
+	for _, format := range []string{"tar", "tar.gz", "tar.zst"} {
+		if !SupportedFormat(format) {
+			t.Errorf("SupportedFormat(%q) = false, want true", format)
+		}
+	}
+	// Formats the README once advertised but the builder never implemented
+	// must be rejected loudly rather than silently producing a gzip archive.
+	for _, format := range []string{"tar.bz2", "tar.xz", "zip", "rar"} {
+		if SupportedFormat(format) {
+			t.Errorf("SupportedFormat(%q) = true, want false", format)
+		}
+	}
+}
+
+func TestBuildRejectsUnsupportedFormat(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "src")
+	if err := os.MkdirAll(src, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := models.ArchiveOptions{Format: "zip", UseTimestamp: true}
+	_, err := NewBuilder(src, filepath.Join(tmp, "out"), opts, nil).Build(context.Background(), "nope")
+	if err == nil {
+		t.Fatal("Build with an unsupported format succeeded, want an error")
+	}
+	if !strings.Contains(err.Error(), "unsupported archive format") {
+		t.Errorf("error = %v, want it to mention the unsupported format", err)
+	}
 }

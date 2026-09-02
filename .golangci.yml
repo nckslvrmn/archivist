@@ -1,0 +1,33 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - misspell
+    - nilerr
+    - rowserrcheck
+    - sqlclosecheck
+    - unconvert
+    - whitespace
+  settings:
+    errcheck:
+      # Failing to close a read-only handle is not worth failing the build,
+      # but every write path stays checked.
+      exclude-functions:
+        - (*os.File).Close
+  exclusions:
+    rules:
+      # Tests deliberately ignore errors on helper cleanup paths.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

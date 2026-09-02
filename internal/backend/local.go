@@ -146,8 +146,8 @@ func (l *LocalBackend) List(ctx context.Context, prefix string) ([]BackupInfo, e
 	// If pattern contains wildcard or is a directory, walk it
 	err := filepath.Walk(searchDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			// Skip paths we can't access
-			return nil
+			// Skip paths we can't access rather than failing the listing.
+			return nil //nolint:nilerr // deliberate skip
 		}
 
 		if info.IsDir() {
@@ -157,7 +157,7 @@ func (l *LocalBackend) List(ctx context.Context, prefix string) ([]BackupInfo, e
 		// Get relative path
 		relPath, err := filepath.Rel(l.basePath, path)
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // deliberate skip
 		}
 
 		// Check if it matches prefix
@@ -190,6 +190,37 @@ func (l *LocalBackend) Delete(ctx context.Context, remotePath string) error {
 	}
 
 	return nil
+}
+
+// RemoteHash implements HashedBackend. Local files carry no stored checksum,
+// so it is computed on demand; this is what makes skip-unchanged and the
+// post-upload integrity check work for local backends instead of silently
+// reporting "no hash support".
+func (l *LocalBackend) RemoteHash(ctx context.Context, remotePath string) (string, string, error) {
+	fullPath := filepath.Join(l.basePath, remotePath)
+
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", ErrRemoteObjectNotFound
+		}
+		return "", "", fmt.Errorf("failed to stat %s: %w", remotePath, err)
+	}
+	if info.IsDir() {
+		return "", "", ErrRemoteObjectNotFound
+	}
+
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+
+	// sha256 matches the digest archive.Builder records, so the comparison
+	// needs no re-hash of the local archive with a different algorithm.
+	hexDigest, err := ComputeFileHash(fullPath, "sha256")
+	if err != nil {
+		return "", "", err
+	}
+	return "sha256", hexDigest, nil
 }
 
 // GetUsage returns storage usage information

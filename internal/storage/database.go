@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -182,7 +183,7 @@ func (d *Database) GetExecution(id string) (*models.Execution, error) {
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("execution not found: %s", id)
 		}
 		return nil, err
@@ -575,7 +576,49 @@ func (d *Database) ReconcileRunningExecutions() (int, error) {
 
 	affected, err := res.RowsAffected()
 	if err != nil {
-		return 0, nil // the update succeeded; the count is not worth an error
+		// The update committed; only the count is unavailable.
+		return 0, nil //nolint:nilerr // count is advisory
+	}
+	return int(affected), nil
+}
+
+// PruneExecutions deletes execution records started before the given time,
+// along with their backend upload rows. Returns the number of executions
+// removed.
+func (d *Database) PruneExecutions(before time.Time) (int, error) {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			log.Printf("Error rolling back transaction: %v", err)
+		}
+	}()
+
+	// Child rows first: the foreign key is enforced now.
+	if _, err := tx.Exec(`
+		DELETE FROM backend_uploads
+		WHERE execution_id IN (
+			SELECT id FROM executions WHERE started_at < ? AND status != 'running'
+		)
+	`, before); err != nil {
+		return 0, fmt.Errorf("failed to prune backend uploads: %w", err)
+	}
+
+	// A run still in progress is never pruned, however old its start time.
+	res, err := tx.Exec("DELETE FROM executions WHERE started_at < ? AND status != 'running'", before)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prune executions: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, nil
 	}
 	return int(affected), nil
 }
@@ -588,7 +631,7 @@ func (d *Database) ClearHistory() error {
 	}
 	defer func() {
 		// Rollback is a no-op if Commit already succeeded; sql.ErrTxDone is expected in that case.
-		if err := tx.Rollback(); err != nil && err != sql.ErrTxDone {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
 			log.Printf("Error rolling back transaction: %v", err)
 		}
 	}()

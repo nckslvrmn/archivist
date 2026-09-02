@@ -79,6 +79,15 @@
 
     <div x-show="backupMode === 'archive'">
         <div class="form-group">
+            <label>Compression</label>
+            <select name="compression">
+                <option value="gzip">gzip (.tar.gz) &mdash; widely compatible</option>
+                <option value="zstd">zstd (.tar.zst) &mdash; faster, smaller</option>
+                <option value="none">none (.tar) &mdash; no compression</option>
+            </select>
+        </div>
+
+        <div class="form-group">
             <label>Use Timestamp in Filename</label>
             <select name="use_timestamp" x-model="useTimestamp">
                 <option value="true">Yes (Point-in-time backups)</option>
@@ -88,8 +97,14 @@
 
         <div class="form-group" x-show="useTimestamp === 'true'">
             <label>Retention (Keep Last N Backups, 0 = unlimited)</label>
-            <input type="number" name="keep_last" value="7">
+            <input type="number" name="keep_last" min="0" value="7">
             <small>Archive mode only. Sync mode is governed by "Delete Remote Files" below.</small>
+        </div>
+
+        <div class="form-group" x-show="useTimestamp === 'true'">
+            <label>Retention (Delete Backups Older Than N Days, 0 = disabled)</label>
+            <input type="number" name="keep_days" min="0" value="0">
+            <small>Combines with the count limit above. The most recent backup is never deleted.</small>
         </div>
     </div>
 
@@ -101,6 +116,16 @@
                 <option value="true">Yes (True mirror)</option>
             </select>
             <small>Sync mode uses this instead of "Keep Last N" retention &mdash; the archive retention setting has no effect here.</small>
+        </div>
+
+        <div class="form-group">
+            <label>Compare Method</label>
+            <select name="compare_method">
+                <option value="auto">Auto (remote hash when available, else size + mtime)</option>
+                <option value="hash">Hash (content comparison only)</option>
+                <option value="mtime">Modified time (size + timestamp)</option>
+                <option value="size">Size only (fastest, least accurate)</option>
+            </select>
         </div>
     </div>
 

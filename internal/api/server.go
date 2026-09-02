@@ -5,8 +5,10 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/mux"
@@ -28,6 +30,9 @@ type Server struct {
 	wsClients map[*websocket.Conn]bool
 	wsMu      sync.RWMutex
 	upgrader  websocket.Upgrader
+	// allowedOrigins holds lowercased host[:port] values accepted in addition
+	// to the request's own Host.
+	allowedOrigins map[string]bool
 }
 
 // Response represents a standard API response
@@ -44,21 +49,26 @@ type ErrorInfo struct {
 	Details interface{} `json:"details,omitempty"`
 }
 
+// Options configures optional server behaviour.
+type Options struct {
+	// AllowedOrigins lists extra origins permitted to open a WebSocket, for
+	// deployments served under a different host than the browser addresses
+	// (e.g. behind a proxy that rewrites Host). Same-origin is always allowed.
+	AllowedOrigins []string
+}
+
 // NewServer creates a new API server
-func NewServer(cfg *config.Manager, db *storage.Database, exec *executor.Executor, sched *scheduler.Scheduler) *Server {
+func NewServer(cfg *config.Manager, db *storage.Database, exec *executor.Executor, sched *scheduler.Scheduler, opts Options) *Server {
 	s := &Server{
-		config:    cfg,
-		db:        db,
-		executor:  exec,
-		scheduler: sched,
-		templates: make(map[string]*template.Template),
-		wsClients: make(map[*websocket.Conn]bool),
-		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				return true // Allow all origins for now
-			},
-		},
+		config:         cfg,
+		db:             db,
+		executor:       exec,
+		scheduler:      sched,
+		templates:      make(map[string]*template.Template),
+		wsClients:      make(map[*websocket.Conn]bool),
+		allowedOrigins: normalizeOrigins(opts.AllowedOrigins),
 	}
+	s.upgrader = websocket.Upgrader{CheckOrigin: s.checkOrigin}
 
 	// Initialize templates
 	if err := s.initTemplates(); err != nil {
@@ -186,6 +196,60 @@ func (s *Server) Router() *mux.Router {
 	return r
 }
 
+// normalizeOrigins turns configured origins ("https://host:8080", "host:8080")
+// into the bare lowercased host[:port] form used for comparison.
+func normalizeOrigins(origins []string) map[string]bool {
+	out := make(map[string]bool, len(origins))
+	for _, origin := range origins {
+		origin = strings.TrimSpace(origin)
+		if origin == "" {
+			continue
+		}
+		if host, ok := originHost(origin); ok {
+			out[host] = true
+		} else {
+			out[strings.ToLower(origin)] = true
+		}
+	}
+	return out
+}
+
+// originHost extracts the lowercased host[:port] from an origin URL.
+func originHost(origin string) (string, bool) {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return "", false
+	}
+	return strings.ToLower(u.Host), true
+}
+
+// checkOrigin rejects cross-origin WebSocket upgrades. Without it any page a
+// LAN browser visits can open the progress stream and read task names, source
+// paths and sizes, because browsers do not apply the same-origin policy to
+// WebSocket connections.
+func (s *Server) checkOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		// Non-browser clients (curl, scripts) send no Origin header. They are
+		// not subject to the attack this guards against.
+		return true
+	}
+
+	host, ok := originHost(origin)
+	if !ok {
+		return false
+	}
+	if host == strings.ToLower(r.Host) {
+		return true
+	}
+	if s.allowedOrigins[host] {
+		return true
+	}
+
+	log.Printf("rejected WebSocket upgrade from origin %q (host %q)", origin, r.Host)
+	return false
+}
+
 // BroadcastProgress implements executor.ProgressBroadcaster.
 // Uses an exclusive lock so concurrent task goroutines cannot write to the
 // same WebSocket connection simultaneously (gorilla/websocket requires
@@ -202,7 +266,9 @@ func (s *Server) BroadcastProgress(event models.ProgressEvent) {
 	}
 	for _, client := range failed {
 		delete(s.wsClients, client)
-		client.Close()
+		if err := client.Close(); err != nil {
+			log.Printf("Error closing failed WebSocket client: %v", err)
+		}
 	}
 }
 

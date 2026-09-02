@@ -166,3 +166,68 @@ func TestLoadRoundTrip(t *testing.T) {
 		t.Errorf("reloaded credential = %v, want REAL-SECRET", got)
 	}
 }
+
+// TestConfigFilePermissions: config.json holds cleartext backend credentials,
+// so neither it nor its directory may be readable by other users.
+func TestConfigFilePermissions(t *testing.T) {
+	m := newTestManager(t)
+	addBackend(t, m, "b1", "REAL-SECRET")
+
+	info, err := os.Stat(m.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("config file mode = %04o, want 0600", perm)
+	}
+
+	dirInfo, err := os.Stat(filepath.Dir(m.configPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := dirInfo.Mode().Perm(); perm != 0700 {
+		t.Errorf("config dir mode = %04o, want 0700", perm)
+	}
+}
+
+// TestConfigPermissionsTightenedOnUpgrade covers an existing installation
+// whose files were created world-readable by an earlier version.
+func TestConfigPermissionsTightenedOnUpgrade(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "config")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"version":"1.0"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(configPath, root)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	dirInfo, err := os.Stat(configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := dirInfo.Mode().Perm(); perm != 0700 {
+		t.Errorf("config dir mode = %04o after upgrade, want 0700", perm)
+	}
+
+	// The file itself is tightened by the next save.
+	if err := m.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Save(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("config file mode = %04o after save, want 0600", perm)
+	}
+}

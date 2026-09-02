@@ -144,6 +144,7 @@ func (e *Executor) Execute(taskID string) (string, error) {
 		if err := e.runExecution(ctx, task, execution); err != nil {
 			log.Printf("Execution failed for task %s: %v", task.Name, err)
 		}
+		e.pruneExecutionHistory()
 	}()
 
 	return executionID, nil
@@ -579,7 +580,7 @@ func (e *Executor) runExecution(ctx context.Context, task *models.Task, executio
 	// it runs on its own bounded context: never on a context that has just
 	// been cancelled (which would delete nothing or, worse, stop halfway),
 	// and never unbounded.
-	if task.RetentionPolicy.KeepLast > 0 && ctx.Err() == nil {
+	if (task.RetentionPolicy.KeepLast > 0 || task.RetentionPolicy.KeepDays > 0) && ctx.Err() == nil {
 		retentionCtx, cancelRetention := context.WithTimeout(context.Background(), retentionTimeout)
 		e.applyRetentionPolicy(retentionCtx, task, backendResults)
 		cancelRetention()
@@ -754,6 +755,8 @@ func (e *Executor) syncToBackend(ctx context.Context, backendID string, task *mo
 			})
 		},
 	)
+
+	syncer.Concurrency = e.config.GetSettings().MaxConcurrentUploads
 
 	// Perform sync
 	syncResult, err := syncer.Sync(ctx)
@@ -1024,26 +1027,85 @@ func (e *Executor) applyRetentionPolicy(ctx context.Context, task *models.Task, 
 			}
 		}
 
-		// Sort oldest-first so the leading slice contains the deletion targets.
-		// LastModified is RFC3339; lexicographic compare is monotonic.
-		sort.Slice(backups, func(i, j int) bool {
-			return backups[i].LastModified < backups[j].LastModified
-		})
-
-		if len(backups) > task.RetentionPolicy.KeepLast {
-			toDelete := len(backups) - task.RetentionPolicy.KeepLast
-			for i := 0; i < toDelete; i++ {
-				if err := backendInstance.Delete(ctx, backups[i].Path); err != nil {
-					log.Printf("Failed to delete old backup %s: %v", backups[i].Path, err)
-				} else {
-					log.Printf("Deleted old backup: %s", backups[i].Path)
-				}
+		for _, victim := range selectExpiredBackups(backups, task.RetentionPolicy, time.Now()) {
+			if err := backendInstance.Delete(ctx, victim.Path); err != nil {
+				log.Printf("Failed to delete old backup %s: %v", victim.Path, err)
+			} else {
+				log.Printf("Deleted old backup: %s", victim.Path)
 			}
 		}
 
 		if closeErr := backendInstance.Close(); closeErr != nil {
 			log.Printf("Error closing backend instance: %v", closeErr)
 		}
+	}
+}
+
+// selectExpiredBackups decides which backups a retention policy removes.
+//
+// The two limits combine: a backup goes if it falls outside the newest
+// KeepLast, or if it is older than KeepDays. Two safety rules override both:
+// the most recent backup is never selected, whatever the policy says — an
+// aggressive age limit, or a clock skew, must not leave a task with no backup
+// at all — and an entry whose timestamp cannot be parsed is ignored entirely,
+// neither deleted nor counted, since retention cannot reason about a file
+// whose age is unknown and must not evict a good backup on its behalf.
+func selectExpiredBackups(backups []backend.BackupInfo, policy models.RetentionPolicy, now time.Time) []backend.BackupInfo {
+	type dated struct {
+		info    backend.BackupInfo
+		modTime time.Time
+	}
+
+	sorted := make([]dated, 0, len(backups))
+	for _, b := range backups {
+		modTime, err := time.Parse(time.RFC3339, b.LastModified)
+		if err != nil {
+			log.Printf("retention: ignoring %s, cannot parse timestamp %q", b.Path, b.LastModified)
+			continue
+		}
+		sorted = append(sorted, dated{info: b, modTime: modTime})
+	}
+
+	if len(sorted) <= 1 {
+		return nil
+	}
+
+	// Oldest first, so the leading entries are the deletion candidates.
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].modTime.Before(sorted[j].modTime)
+	})
+
+	ageCutoff := now.AddDate(0, 0, -policy.KeepDays)
+
+	// The final entry is the newest and is never a candidate.
+	var expired []backend.BackupInfo
+	for i, b := range sorted[:len(sorted)-1] {
+		overCount := policy.KeepLast > 0 && len(sorted)-i > policy.KeepLast
+		overAge := policy.KeepDays > 0 && b.modTime.Before(ageCutoff)
+
+		if overCount || overAge {
+			expired = append(expired, b.info)
+		}
+	}
+	return expired
+}
+
+// pruneExecutionHistory drops execution records older than the configured
+// retention window. Without it the history table grows without bound and the
+// only remedy is the clear-all button.
+func (e *Executor) pruneExecutionHistory() {
+	days := e.config.GetSettings().ExecutionHistoryDays
+	if days <= 0 {
+		return
+	}
+
+	removed, err := e.db.PruneExecutions(time.Now().AddDate(0, 0, -days))
+	if err != nil {
+		log.Printf("Failed to prune execution history: %v", err)
+		return
+	}
+	if removed > 0 {
+		log.Printf("Pruned %d execution record(s) older than %d days", removed, days)
 	}
 }
 

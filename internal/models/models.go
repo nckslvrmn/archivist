@@ -49,8 +49,8 @@ type Schedule struct {
 
 // ArchiveOptions represents archive creation options
 type ArchiveOptions struct {
-	Format       string      `json:"format"`        // tar.gz, tar.bz2, tar.xz, tar.zst, zip, sync
-	Compression  string      `json:"compression"`   // none, gzip, bzip2, xz, zstd
+	Format       string      `json:"format"`        // tar, tar.gz, tar.zst, sync
+	Compression  string      `json:"compression"`   // none, gzip, zstd
 	NamePattern  string      `json:"name_pattern"`  // e.g., "{task}_{timestamp}.tar.gz" or "{task}_latest.tar.gz"
 	UseTimestamp bool        `json:"use_timestamp"` // If false, creates static filename (mirror strategy)
 	SyncOptions  SyncOptions `json:"sync_options"`  // Options for sync mode
@@ -59,11 +59,20 @@ type ArchiveOptions struct {
 // SyncOptions represents file-by-file sync options
 type SyncOptions struct {
 	DeleteRemote bool `json:"delete_remote"` // If true, delete remote files not in source (true mirror)
+	// CompareMethod selects how a local file is compared with its remote
+	// counterpart: "auto" (default) uses the remote hash when the backend
+	// exposes one and falls back to size+mtime, "hash" compares content
+	// hashes only, "mtime" compares size and modification time, "size"
+	// compares size alone.
+	CompareMethod string `json:"compare_method,omitempty"`
 }
 
-// RetentionPolicy represents backup retention configuration
+// RetentionPolicy represents backup retention configuration.
+// The two limits combine: a backup is deleted if it falls outside KeepLast
+// or is older than KeepDays. The most recent backup is never deleted.
 type RetentionPolicy struct {
 	KeepLast int `json:"keep_last"` // Number of backups to keep (0 = unlimited)
+	KeepDays int `json:"keep_days"` // Delete backups older than N days (0 = disabled)
 }
 
 // Settings represents application settings
@@ -72,6 +81,8 @@ type Settings struct {
 	SourcesDir            string `json:"sources_dir"`
 	MaxConcurrentTasks    int    `json:"max_concurrent_tasks"`
 	MaxConcurrentBackends int    `json:"max_concurrent_backends"` // Per-task fan-out cap; 0 = unlimited.
+	MaxConcurrentUploads  int    `json:"max_concurrent_uploads"`  // Per-backend sync upload cap; 0 = default.
+	ExecutionHistoryDays  int    `json:"execution_history_days"`  // Prune execution records older than N days; 0 = keep forever.
 	LogLevel              string `json:"log_level"`
 }
 

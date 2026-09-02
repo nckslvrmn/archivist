@@ -282,7 +282,9 @@ func (b *GDriveBackend) GetUsage(ctx context.Context) (*models.StorageUsage, err
 	// Get account-wide quota
 	about, err := b.service.About.Get().Fields("storageQuota").Context(ctx).Do()
 	if err != nil {
-		return &models.StorageUsage{
+		// Quota lookup needs a scope the backup credentials may not have;
+		// report the folder size with an unknown total rather than failing.
+		return &models.StorageUsage{ //nolint:nilerr // quota is optional
 			Used:  totalSize,
 			Total: -1,
 		}, nil

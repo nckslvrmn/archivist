@@ -1,4 +1,4 @@
-.PHONY: clean lint test run all
+.PHONY: clean lint vulncheck test run all
 
 all: clean test lint build docker run
 
@@ -7,7 +7,8 @@ help:
 	@echo "Archivist - Makefile Commands"
 	@echo ""
 	@echo "  make test          - Run all tests"
-	@echo "  make lint          - Run linters"
+	@echo "  make lint          - Run linters and formatting checks"
+	@echo "  make vulncheck     - Report known vulnerabilities in dependencies"
 	@echo "  make clean         - Clean build artifacts"
 	@echo "  make build         - Build the Go binary"
 	@echo "  make run           - Run the application locally"
@@ -25,11 +26,20 @@ test:
 	@echo "Running tests..."
 	go test -v ./...
 
-# Run linters
+# Run linters (same checks as CI)
 lint:
+	@echo "Checking formatting..."
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then echo "These files need gofmt:"; echo "$$unformatted"; exit 1; fi
 	@echo "Running linters..."
 	@command -v golangci-lint >/dev/null 2>&1 || { echo "golangci-lint not installed. Install from https://golangci-lint.run/"; exit 1; }
 	golangci-lint run ./...
+
+# Report known vulnerabilities in dependencies
+vulncheck:
+	@echo "Running govulncheck..."
+	@command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@latest
+	govulncheck ./...
 
 # Build the binary
 build:

@@ -141,3 +141,91 @@ func TestForeignKeysEnforced(t *testing.T) {
 		t.Fatal("insert with a dangling execution_id succeeded, want a foreign key error")
 	}
 }
+
+// TestPruneExecutions covers the history retention window.
+func TestPruneExecutions(t *testing.T) {
+	db := newTestDB(t)
+
+	now := time.Now()
+	rows := []struct {
+		id     string
+		age    time.Duration
+		status string
+	}{
+		{"old-1", 100 * 24 * time.Hour, "success"},
+		{"old-2", 91 * 24 * time.Hour, "failed"},
+		{"recent", 10 * 24 * time.Hour, "success"},
+		{"old-running", 200 * 24 * time.Hour, "running"},
+	}
+	for _, r := range rows {
+		if err := db.CreateExecution(&models.Execution{
+			ID: r.id, TaskID: "t1", TaskName: "t1",
+			StartedAt: now.Add(-r.age), Status: r.status,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		uploadedAt := now.Add(-r.age)
+		if err := db.AddBackendUpload(r.id, &models.BackendResult{
+			BackendID: "b1", BackendName: "b1", Status: "success", UploadedAt: &uploadedAt,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, err := db.PruneExecutions(now.AddDate(0, 0, -90))
+	if err != nil {
+		t.Fatalf("PruneExecutions: %v", err)
+	}
+	if removed != 2 {
+		t.Errorf("removed %d executions, want 2", removed)
+	}
+
+	for _, id := range []string{"old-1", "old-2"} {
+		if _, err := db.GetExecution(id); err == nil {
+			t.Errorf("execution %s still present after pruning", id)
+		}
+	}
+
+	// A recent execution keeps its uploads.
+	recent, err := db.GetExecution("recent")
+	if err != nil {
+		t.Fatalf("recent execution was pruned: %v", err)
+	}
+	if len(recent.BackendResults) != 1 {
+		t.Errorf("recent execution has %d backend results, want 1", len(recent.BackendResults))
+	}
+
+	// An in-flight run is never pruned, however old it looks.
+	if _, err := db.GetExecution("old-running"); err != nil {
+		t.Errorf("running execution was pruned: %v", err)
+	}
+
+	// The pruned executions' upload rows went with them.
+	var orphans int
+	if err := db.db.QueryRow(`
+		SELECT COUNT(*) FROM backend_uploads
+		WHERE execution_id NOT IN (SELECT id FROM executions)
+	`).Scan(&orphans); err != nil {
+		t.Fatal(err)
+	}
+	if orphans != 0 {
+		t.Errorf("%d orphaned backend_uploads rows remain", orphans)
+	}
+}
+
+func TestPruneExecutionsNoMatches(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.CreateExecution(&models.Execution{
+		ID: "e1", TaskID: "t1", TaskName: "t1", StartedAt: time.Now(), Status: "success",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := db.PruneExecutions(time.Now().AddDate(0, 0, -90))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Errorf("removed %d executions, want 0", removed)
+	}
+}

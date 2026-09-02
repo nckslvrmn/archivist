@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/nsilverman/archivist/internal/models"
 )
 
@@ -85,13 +87,11 @@ func (b *Builder) Build(ctx context.Context, taskName string) (*Result, error) {
 		return nil, fmt.Errorf("failed to calculate source size: %w", err)
 	}
 
-	var result *Result
-	switch b.Options.Format {
-	case "tar.gz", "tar":
-		result, err = b.createTarGz(ctx, root, archivePath, totalSize)
-	default:
-		return nil, fmt.Errorf("unsupported archive format: %s", b.Options.Format)
+	if !SupportedFormat(b.Options.Format) {
+		return nil, fmt.Errorf("unsupported archive format: %s (supported: tar, tar.gz, tar.zst)", b.Options.Format)
 	}
+
+	result, err := b.createTarArchive(ctx, root, archivePath, totalSize)
 
 	if err != nil {
 		if removeErr := os.Remove(archivePath); removeErr != nil && !os.IsNotExist(removeErr) {
@@ -108,12 +108,14 @@ func (b *Builder) Build(ctx context.Context, taskName string) (*Result, error) {
 // Exposed at package scope so dry-run / planning code can derive the filename
 // without instantiating a Builder.
 func GenerateFilename(taskName string, opts models.ArchiveOptions) (string, error) {
+	ext := ArchiveExtension(opts)
+
 	pattern := opts.NamePattern
 	if pattern == "" {
 		if opts.UseTimestamp {
-			pattern = "{task}_{timestamp}.tar.gz"
+			pattern = "{task}_{timestamp}" + ext
 		} else {
-			pattern = "{task}_latest.tar.gz"
+			pattern = "{task}_latest" + ext
 		}
 	}
 
@@ -130,33 +132,87 @@ func GenerateFilename(taskName string, opts models.ArchiveOptions) (string, erro
 		}
 	}
 
-	if !strings.HasSuffix(filename, ".tar.gz") && !strings.HasSuffix(filename, ".tar") {
-		filename += ".tar.gz"
+	hasKnownExt := false
+	for _, known := range knownExtensions {
+		if strings.HasSuffix(filename, known) {
+			hasKnownExt = true
+			break
+		}
+	}
+	if !hasKnownExt {
+		filename += ext
 	}
 
 	return filename, nil
 }
 
+// Supported archive extensions, longest first so ".tar.gz" is matched before
+// ".tar" when inspecting a filename pattern.
+var knownExtensions = []string{".tar.gz", ".tar.zst", ".tar"}
+
 // ArchiveExtension returns the on-disk extension produced for the given
-// archive options (e.g. ".tar.gz" or ".tar"). Used by retention to filter
-// candidate objects without re-parsing the filename pattern.
+// archive options. Retention and the skip-unchanged check both filter remote
+// objects with it, so it must agree with GenerateFilename exactly.
 func ArchiveExtension(opts models.ArchiveOptions) string {
 	if opts.NamePattern != "" {
-		if strings.HasSuffix(opts.NamePattern, ".tar.gz") {
-			return ".tar.gz"
-		}
-		if strings.HasSuffix(opts.NamePattern, ".tar") {
-			return ".tar"
+		for _, ext := range knownExtensions {
+			if strings.HasSuffix(opts.NamePattern, ext) {
+				return ext
+			}
 		}
 	}
-	if opts.Format == "tar" && opts.Compression == "none" {
+	switch compressionFor(opts) {
+	case compressionZstd:
+		return ".tar.zst"
+	case compressionNone:
 		return ".tar"
+	default:
+		return ".tar.gz"
 	}
-	return ".tar.gz"
 }
 
-// createTarGz creates a tar.gz archive rooted at root (already symlink-resolved).
-func (b *Builder) createTarGz(ctx context.Context, root, outputPath string, totalSize int64) (*Result, error) {
+// Compression algorithms understood by the builder.
+const (
+	compressionGzip = "gzip"
+	compressionZstd = "zstd"
+	compressionNone = "none"
+)
+
+// compressionFor resolves the effective compression for a task, tolerating
+// the older configurations that only set Format.
+func compressionFor(opts models.ArchiveOptions) string {
+	switch strings.ToLower(opts.Compression) {
+	case compressionZstd:
+		return compressionZstd
+	case compressionNone:
+		return compressionNone
+	case compressionGzip:
+		return compressionGzip
+	}
+	// Compression unset: fall back to what the format implies.
+	switch strings.ToLower(opts.Format) {
+	case "tar.zst":
+		return compressionZstd
+	case "tar":
+		return compressionNone
+	default:
+		return compressionGzip
+	}
+}
+
+// SupportedFormat reports whether the builder can produce this format.
+func SupportedFormat(format string) bool {
+	switch strings.ToLower(format) {
+	case "tar", "tar.gz", "tar.zst":
+		return true
+	default:
+		return false
+	}
+}
+
+// createTarArchive creates a tar archive rooted at root (already
+// symlink-resolved), compressed according to the task's options.
+func (b *Builder) createTarArchive(ctx context.Context, root, outputPath string, totalSize int64) (*Result, error) {
 	outFile, err := os.Create(outputPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create archive file: %w", err)
@@ -175,15 +231,26 @@ func (b *Builder) createTarGz(ctx context.Context, root, outputPath string, tota
 	hasher := sha256.New()
 	multiWriter := io.MultiWriter(outFile, hasher)
 
-	// Create gzip writer if compression is enabled. The hasher sits beneath
-	// gzip so it sees the final on-disk bytes, including the gzip/tar footers
-	// emitted on Close — otherwise the recorded hash covers only a prefix of
-	// the file and never matches what backends compute after upload.
-	var archiveWriter io.Writer = multiWriter
-	var gzipWriter *gzip.Writer
-	if b.Options.Compression == "gzip" || b.Options.Compression == "" {
-		gzipWriter = gzip.NewWriter(multiWriter)
-		archiveWriter = gzipWriter
+	// The hasher sits beneath the compressor so it sees the final on-disk
+	// bytes, including the footers emitted on Close — otherwise the recorded
+	// hash covers only a prefix of the file and never matches what backends
+	// compute after upload.
+	archiveWriter := multiWriter
+	var compressor io.WriteCloser
+	switch compressionFor(b.Options) {
+	case compressionZstd:
+		zw, err := zstd.NewWriter(multiWriter)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create zstd writer: %w", err)
+		}
+		compressor = zw
+		archiveWriter = zw
+	case compressionNone:
+		// Plain tar: the tar writer writes straight to the file.
+	default:
+		gw := gzip.NewWriter(multiWriter)
+		compressor = gw
+		archiveWriter = gw
 	}
 
 	tarWriter := tar.NewWriter(archiveWriter)
@@ -304,14 +371,14 @@ func (b *Builder) createTarGz(ctx context.Context, root, outputPath string, tota
 		return nil, fmt.Errorf("failed to create archive: %w", err)
 	}
 
-	// Flush writers in order (tar → gzip → file) so the hasher sees every
-	// trailing byte before we read the digest.
+	// Flush writers in order (tar → compressor → file) so the hasher sees
+	// every trailing byte before we read the digest.
 	if err := tarWriter.Close(); err != nil {
 		return nil, fmt.Errorf("failed to close tar writer: %w", err)
 	}
-	if gzipWriter != nil {
-		if err := gzipWriter.Close(); err != nil {
-			return nil, fmt.Errorf("failed to close gzip writer: %w", err)
+	if compressor != nil {
+		if err := compressor.Close(); err != nil {
+			return nil, fmt.Errorf("failed to close compression writer: %w", err)
 		}
 	}
 	if err := outFile.Sync(); err != nil {
@@ -364,7 +431,7 @@ func (b *Builder) writeRegularFile(tw *tar.Writer, path, name string, info os.Fi
 	}
 
 	written, err := io.CopyN(tw, file, header.Size)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		// The header is already committed, so the body must still be filled
 		// out to header.Size to keep the archive readable.
 		warn("truncated %s after %d/%d bytes: %v", name, written, header.Size, err)
@@ -409,7 +476,9 @@ func (b *Builder) calculateSize(ctx context.Context, root string) (totalSize int
 		}
 		info, err := d.Info()
 		if err != nil || !info.Mode().IsRegular() {
-			return nil
+			// Sizing is best-effort: it only drives the progress bar, and
+			// the archive walk reports anything it cannot read.
+			return nil //nolint:nilerr // deliberate skip
 		}
 		totalSize += info.Size()
 		fileCount++

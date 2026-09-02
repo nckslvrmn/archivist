@@ -5,12 +5,13 @@ A Docker-first web-based backup solution for creating regularly scheduled backup
 ## Features
 
 - **Multi-Cloud Storage**: AWS S3, Google Cloud Storage, Google Drive, Azure Blob Storage, Backblaze B2, and S3-compatible storage
+- **Compression Choices**: gzip, zstd, or uncompressed tar
 - **Configurable Storage Tier**: Configure storage classes (S3 Glacier, GCS Nearline/Coldline/Archive, Azure Cool/Cold/Archive) to reduce costs
 - **Flexible Scheduling**: Simple presets (hourly, daily, weekly) or custom cron expressions
 - **Multiple Backends per Task**: Send backups to multiple storage locations simultaneously
 - **Real-Time Monitoring**: Track backup progress and execution history through web interface
 - **Archive or Sync Modes**: Create compressed archives or sync (mirror) directories individually
-- **Retention Policies**: Automatic backup lifecycle management and cleanup
+- **Retention Policies**: Keep the newest N backups, drop anything past an age limit, or both
 - **Portable Configuration**: JSON-based configuration with relative path support
 - **Container-First Design**: Single-volume Docker strategy with symlink-based source management
 - **Dark Minimal UI**: Clean, modern web interface
@@ -56,11 +57,17 @@ Access the web interface at <http://localhost:8080>
 
 Configure via command-line flags or environment variables:
 
-| Flag          | Environment Variable  | Default | Description                          |
-|---------------|-----------------------|---------|--------------------------------------|
-| `--root`      | `ARCHIVIST_ROOT`      | `/data` | Root data directory                  |
-| `--port`      | `ARCHIVIST_PORT`      | `8080`  | HTTP server port                     |
-| `--log-level` | `ARCHIVIST_LOG_LEVEL` | `info`  | Log level (debug, info, warn, error) |
+| Flag                | Environment Variable        | Default | Description                                        |
+|---------------------|-----------------------------|---------|----------------------------------------------------|
+| `--root`            | `ARCHIVIST_ROOT`            | `/data` | Root data directory                                |
+| `--port`            | `ARCHIVIST_PORT`            | `8080`  | HTTP server port                                   |
+| `--log-level`       | `ARCHIVIST_LOG_LEVEL`       | `info`  | Log level (debug, info, warn, error)               |
+| `--allowed-origins` | `ARCHIVIST_ALLOWED_ORIGINS` | *(none)* | Extra origins allowed to open the progress WebSocket |
+
+The WebSocket that streams backup progress accepts same-origin connections
+automatically. `--allowed-origins` is only needed when the browser reaches
+Archivist under a different host than the one it sees in the `Host` header
+(comma-separated, e.g. `https://archivist.example.com`).
 
 All paths are derived from the root directory:
 
@@ -77,6 +84,23 @@ Archivist supports absolute and relative paths in configurations:
 - **Relative paths**: Resolved relative to root directory (e.g., `sources/mydata` → `{root}/sources/mydata`)
 
 Using relative paths makes your configuration portable between environments.
+
+### Settings
+
+`config/config.json` holds a `settings` object alongside tasks and backends:
+
+| Setting                   | Default | Description                                                        |
+|---------------------------|---------|--------------------------------------------------------------------|
+| `max_concurrent_backends` | `4`     | Per-task fan-out cap when a task targets several backends           |
+| `max_concurrent_uploads`  | `4`     | Files compared and uploaded at once during a sync                   |
+| `execution_history_days`  | `90`    | Execution records older than this are pruned; `0` keeps them forever |
+
+### File Permissions
+
+`config/config.json` stores backend credentials in cleartext, so Archivist
+writes it with mode `0600` inside a `0700` directory, and tightens both on
+startup for installations created by earlier versions. Keep any service
+account JSON files in the same directory.
 
 ## Supported Storage Backends
 
@@ -260,7 +284,7 @@ Cost-effective cloud storage with S3-compatible API.
 
 ### Archive Mode (Default)
 
-Creates compressed tar.gz archives of source directories:
+Creates a compressed tar archive of the source directory:
 
 ```json
 {
@@ -273,10 +297,23 @@ Creates compressed tar.gz archives of source directories:
 }
 ```
 
+**Supported formats**:
+
+| `format`   | `compression` | Extension  | Notes                                     |
+|------------|---------------|------------|-------------------------------------------|
+| `tar.gz`   | `gzip`        | `.tar.gz`  | Default; widest compatibility             |
+| `tar.zst`  | `zstd`        | `.tar.zst` | Faster and smaller than gzip              |
+| `tar`      | `none`        | `.tar`     | No compression                            |
+
 **Naming strategies**:
 
 - **Timestamped** (`use_timestamp: true`): `database_20250127_143022.tar.gz`
 - **Static** (`use_timestamp: false`): `database_latest.tar.gz` (overwrites previous)
+
+**Symlinks and special files**: symlinks are archived as symlinks (their
+targets are not followed), FIFOs and device nodes are recorded without being
+read, and sockets are skipped. Files that cannot be read are skipped with a
+warning rather than failing the whole backup.
 
 ### Sync Mode
 
@@ -286,16 +323,50 @@ Syncs files individually to backends without creating archives:
 {
   "mode": "sync",
   "sync_options": {
-    "compare_method": "hash",
+    "compare_method": "auto",
     "delete_remote": false
   }
 }
 ```
 
-**Compare methods**:
+**Compare methods** (a size difference always forces an upload):
 
-- `hash` - Compare SHA256 hashes (slower, most accurate)
-- `mtime` - Compare modification time and size (faster)
+- `auto` (default) - Compare the remote content hash when the backend exposes
+  one, otherwise fall back to size and modification time
+- `hash` - Compare content hashes only; re-upload when no remote hash exists
+- `mtime` - Compare size and modification time
+- `size` - Compare size alone (fastest, least accurate)
+
+**Deleting remote files**: with `delete_remote: true`, remote files missing
+from the source are removed. Archivist refuses to do this when the source
+scans as empty but the remote is not, so an unmounted volume cannot be
+mirrored into a deletion of your only copy.
+
+## Retention
+
+Archive tasks can limit how many backups are kept, how old they may get, or
+both:
+
+```json
+{
+  "retention_policy": {
+    "keep_last": 24,
+    "keep_days": 30
+  }
+}
+```
+
+- `keep_last` - Keep the newest N backups (`0` = unlimited)
+- `keep_days` - Delete backups older than N days (`0` = disabled)
+
+The limits combine: a backup is removed if it falls outside `keep_last` **or**
+is older than `keep_days`. Two rules always win over the policy — the most
+recent backup is never deleted, and a backup whose timestamp cannot be read is
+left alone. Retention applies to archive mode only; sync mode is governed by
+`delete_remote`.
+
+Execution history is pruned separately, via the `execution_history_days`
+setting.
 
 ## Volume Strategy
 
@@ -349,7 +420,8 @@ curl -X POST http://localhost:8080/api/v1/tasks \
       "use_timestamp": true
     },
     "retention_policy": {
-      "keep_last": 24
+      "keep_last": 24,
+      "keep_days": 30
     },
     "enabled": true
   }'
@@ -372,7 +444,8 @@ curl -X POST http://localhost:8080/api/v1/tasks/task-id/execute
 Archivist - Makefile Commands
 
   make test          - Run all tests
-  make lint          - Run linters
+  make lint          - Run linters and formatting checks
+  make vulncheck     - Report known vulnerabilities in dependencies
   make clean         - Clean build artifacts
   make build         - Build the Go binary
   make run           - Run the application locally

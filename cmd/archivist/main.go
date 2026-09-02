@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,6 +30,8 @@ func main() {
 	port := flag.String("port", getEnv("ARCHIVIST_PORT", defaultPort), "HTTP server port")
 	rootDir := flag.String("root", getEnv("ARCHIVIST_ROOT", defaultRootDir), "Root data directory")
 	logLevel := flag.String("log-level", getEnv("ARCHIVIST_LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
+	allowedOrigins := flag.String("allowed-origins", getEnv("ARCHIVIST_ALLOWED_ORIGINS", ""),
+		"Comma-separated extra origins allowed to open the progress WebSocket (same-origin is always allowed)")
 	flag.Parse()
 
 	// Derive paths from root directory
@@ -92,6 +95,15 @@ func main() {
 		log.Printf("Marked %d interrupted execution(s) as failed", interrupted)
 	}
 
+	// Drop execution records past the retention window before serving.
+	if days := configMgr.GetSettings().ExecutionHistoryDays; days > 0 {
+		if pruned, err := db.PruneExecutions(time.Now().AddDate(0, 0, -days)); err != nil {
+			log.Printf("Warning: failed to prune execution history: %v", err)
+		} else if pruned > 0 {
+			log.Printf("Pruned %d execution record(s) older than %d days", pruned, days)
+		}
+	}
+
 	// Initialize backup executor
 	log.Println("Initializing executor...")
 	exec := executor.NewExecutor(configMgr, db)
@@ -108,7 +120,9 @@ func main() {
 
 	// Initialize API server
 	log.Println("Initializing API server...")
-	server := api.NewServer(configMgr, db, exec, sched)
+	server := api.NewServer(configMgr, db, exec, sched, api.Options{
+		AllowedOrigins: splitList(*allowedOrigins),
+	})
 	log.Println("API server initialized")
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%s", *port),
@@ -152,16 +166,29 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
+// splitList splits a comma-separated flag value, dropping empty entries.
+func splitList(value string) []string {
+	var out []string
+	for _, part := range strings.Split(value, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
 // ensureDirectories creates required directories if they don't exist
 func ensureDirectories(rootDir, tempDir, sourcesDir string) error {
-	dirs := []string{
-		filepath.Join(rootDir, "config"),
-		tempDir,
-		sourcesDir,
+	// The config directory holds cleartext backend credentials and any
+	// service-account JSON files, so it is owner-only; the rest are not.
+	dirs := map[string]os.FileMode{
+		filepath.Join(rootDir, "config"): 0700,
+		tempDir:                          0755,
+		sourcesDir:                       0755,
 	}
 
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+	for dir, mode := range dirs {
+		if err := os.MkdirAll(dir, mode); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}

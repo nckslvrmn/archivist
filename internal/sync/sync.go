@@ -7,6 +7,7 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nsilverman/archivist/internal/backend"
@@ -43,6 +44,9 @@ type Syncer struct {
 	RemotePath string
 	Options    models.SyncOptions
 	Progress   ProgressCallback
+	// Concurrency caps how many files are compared and uploaded at once.
+	// Zero selects defaultUploadConcurrency.
+	Concurrency int
 }
 
 // NewSyncer creates a new syncer
@@ -91,55 +95,36 @@ func (s *Syncer) Sync(ctx context.Context) (*SyncResult, error) {
 		remoteFileMap[relPath] = rf
 	}
 
-	// Step 3: Compare and upload changed/new files
-	s.reportProgress("syncing", 0, len(localFiles), "")
-	for i, localFile := range localFiles {
-		// Stop promptly on cancellation instead of grinding through every
-		// remaining file and collecting one context error per file.
-		if err := ctx.Err(); err != nil {
-			return result, err
-		}
-		s.reportProgress("syncing", i, len(localFiles), localFile.RelativePath)
-
+	// Step 3: whatever exists locally is not a deletion candidate. This pass
+	// is sequential and cheap (map operations only) so the upload pass below
+	// can run concurrently without touching remoteFileMap.
+	comparisons := make([]comparison, 0, len(localFiles))
+	for _, localFile := range localFiles {
 		remoteFile, exists := remoteFileMap[localFile.RelativePath]
-		needsUpload := false
-
-		if !exists {
-			// File doesn't exist remotely, upload it
-			needsUpload = true
-		} else {
-			// File exists, compare based on method
-			needsUpload = s.needsUpload(localFile, remoteFile)
-		}
-
-		if needsUpload {
-			// Upload file
-			remotePath := filepath.Join(s.RemotePath, localFile.RelativePath)
-			// Convert to forward slashes for remote paths
-			remotePath = filepath.ToSlash(remotePath)
-
-			// Create progress callback for this file
-			uploadProgress := func(uploaded, total int64) {
-				// Could report per-file progress here if needed
-			}
-
-			err := backend.UploadWithRetry(ctx, s.Backend, localFile.Path, remotePath, uploadProgress, backend.DefaultUploadRetry)
-			if err != nil {
-				result.Errors = append(result.Errors, fmt.Errorf("failed to upload %s: %w", localFile.RelativePath, err))
-			} else {
-				result.FilesUploaded++
-				result.BytesUploaded += localFile.Size
-			}
-		} else {
-			result.FilesSkipped++
-		}
-
-		// Remove from remote map (we'll use the remaining entries for deletion)
+		comparisons = append(comparisons, comparison{local: localFile, remote: remoteFile, remoteExists: exists})
 		delete(remoteFileMap, localFile.RelativePath)
 	}
 
-	// Step 4: Delete remote files that don't exist locally (if enabled)
+	// Step 4: compare and upload, several files at a time. Both halves of the
+	// per-file work benefit: hashing for the comparison is CPU/IO bound and
+	// uploads are latency bound, and doing them one file at a time is the
+	// difference between minutes and hours on a many-small-files source.
+	if err := s.uploadAll(ctx, comparisons, result); err != nil {
+		return result, err
+	}
+
+	// Step 5: Delete remote files that don't exist locally (if enabled)
 	if s.Options.DeleteRemote && len(remoteFileMap) > 0 {
+		// Guard against a source that exists but is empty — an unmounted
+		// volume or a failed network mount looks exactly like "the user
+		// deleted everything", and mirroring that would destroy the only
+		// remaining copy.
+		if len(localFiles) == 0 && len(remoteFiles) > 0 {
+			return result, fmt.Errorf(
+				"refusing to delete %d remote file(s): source %s contains no files (unmounted volume?)",
+				len(remoteFiles), s.SourcePath)
+		}
+
 		s.reportProgress("deleting", 0, len(remoteFileMap), "")
 		i := 0
 		for _, remoteFile := range remoteFileMap {
@@ -160,6 +145,95 @@ func (s *Syncer) Sync(ctx context.Context) (*SyncResult, error) {
 	s.reportProgress("completed", len(localFiles), len(localFiles), "")
 
 	return result, nil
+}
+
+// comparison pairs a local file with its remote counterpart, if any.
+type comparison struct {
+	local        FileInfo
+	remote       backend.BackupInfo
+	remoteExists bool
+}
+
+// defaultUploadConcurrency is used when Concurrency is unset.
+const defaultUploadConcurrency = 4
+
+// uploadAll compares and uploads files with bounded concurrency, updating
+// result as it goes. It returns an error only when the whole sync should stop
+// (cancellation); per-file failures are collected into result.Errors so one
+// bad file does not abandon the rest.
+func (s *Syncer) uploadAll(ctx context.Context, comparisons []comparison, result *SyncResult) error {
+	total := len(comparisons)
+	s.reportProgress("syncing", 0, total, "")
+	if total == 0 {
+		return nil
+	}
+
+	workers := s.Concurrency
+	if workers <= 0 {
+		workers = defaultUploadConcurrency
+	}
+	if workers > total {
+		workers = total
+	}
+
+	var (
+		mu        sync.Mutex // guards result and the progress counter
+		processed int
+		wg        sync.WaitGroup
+	)
+
+	jobs := make(chan comparison)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+
+				needsUpload := !job.remoteExists || s.needsUpload(job.local, job.remote)
+
+				var uploadErr error
+				if needsUpload {
+					remotePath := filepath.ToSlash(filepath.Join(s.RemotePath, job.local.RelativePath))
+					uploadErr = backend.UploadWithRetry(ctx, s.Backend, job.local.Path, remotePath,
+						func(uploaded, total int64) {}, backend.DefaultUploadRetry)
+				}
+
+				mu.Lock()
+				switch {
+				case !needsUpload:
+					result.FilesSkipped++
+				case uploadErr != nil:
+					result.Errors = append(result.Errors,
+						fmt.Errorf("failed to upload %s: %w", job.local.RelativePath, uploadErr))
+				default:
+					result.FilesUploaded++
+					result.BytesUploaded += job.local.Size
+				}
+				processed++
+				current := processed
+				mu.Unlock()
+
+				s.reportProgress("syncing", current, total, job.local.RelativePath)
+			}
+		}()
+	}
+
+	for _, job := range comparisons {
+		select {
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return ctx.Err()
+		case jobs <- job:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+
+	return ctx.Err()
 }
 
 // DryRun performs sync analysis without making changes
@@ -239,6 +313,12 @@ func (s *Syncer) DryRun(ctx context.Context) (*models.SyncDetails, error) {
 func (s *Syncer) getUploadReason(local FileInfo, remote backend.BackupInfo) string {
 	if local.Size != remote.Size {
 		return "Size changed"
+	}
+	if s.compareMethod() == CompareHash && (remote.HashAlgo == "" || remote.Hash == "") {
+		return "No remote hash available for hash comparison"
+	}
+	if s.compareMethod() == CompareMtime {
+		return "Modified timestamp newer"
 	}
 	if remote.HashAlgo != "" && remote.Hash != "" {
 		if localHex, err := backend.ComputeFileHash(local.Path, remote.HashAlgo); err == nil {
@@ -320,22 +400,62 @@ func (s *Syncer) listRemoteFiles(ctx context.Context) ([]backend.BackupInfo, err
 	return s.Backend.List(ctx, s.RemotePath)
 }
 
-// needsUpload prefers a remote-side content hash when the backend exposes
-// one; otherwise it falls back to size + mtime.
+// Comparison methods accepted in SyncOptions.CompareMethod.
+const (
+	CompareAuto  = "auto"
+	CompareHash  = "hash"
+	CompareMtime = "mtime"
+	CompareSize  = "size"
+)
+
+// compareMethod resolves the configured method, defaulting to auto.
+func (s *Syncer) compareMethod() string {
+	switch strings.ToLower(s.Options.CompareMethod) {
+	case CompareHash:
+		return CompareHash
+	case CompareMtime:
+		return CompareMtime
+	case CompareSize:
+		return CompareSize
+	default:
+		return CompareAuto
+	}
+}
+
+// needsUpload decides whether a local file differs from its remote copy,
+// according to the configured comparison method.
 func (s *Syncer) needsUpload(local FileInfo, remote backend.BackupInfo) bool {
+	// A size difference is conclusive under every method.
 	if local.Size != remote.Size {
 		return true
 	}
 
-	if remote.HashAlgo != "" && remote.Hash != "" {
+	switch s.compareMethod() {
+	case CompareSize:
+		return false
+	case CompareMtime:
+		return s.mtimeNewer(local, remote)
+	case CompareHash:
+		// Explicit hash comparison: with no remote hash available there is no
+		// evidence the copies match, so re-upload rather than assume.
+		if remote.HashAlgo == "" || remote.Hash == "" {
+			return true
+		}
 		localHex, err := backend.ComputeFileHash(local.Path, remote.HashAlgo)
 		if err != nil {
-			return s.mtimeNewer(local, remote)
+			return true
 		}
 		return !strings.EqualFold(localHex, remote.Hash)
+	default: // auto
+		if remote.HashAlgo != "" && remote.Hash != "" {
+			localHex, err := backend.ComputeFileHash(local.Path, remote.HashAlgo)
+			if err != nil {
+				return s.mtimeNewer(local, remote)
+			}
+			return !strings.EqualFold(localHex, remote.Hash)
+		}
+		return s.mtimeNewer(local, remote)
 	}
-
-	return s.mtimeNewer(local, remote)
 }
 
 func (s *Syncer) mtimeNewer(local FileInfo, remote backend.BackupInfo) bool {

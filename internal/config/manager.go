@@ -21,12 +21,25 @@ type Manager struct {
 	mu         sync.RWMutex
 }
 
+// configDirMode and configFileMode keep the configuration owner-only: it
+// holds backend credentials (S3 secret keys, Azure account keys) in cleartext,
+// and the directory alongside it holds service-account JSON files.
+const (
+	configDirMode  os.FileMode = 0700
+	configFileMode os.FileMode = 0600
+)
+
 // NewManager creates a new configuration manager
 func NewManager(configPath string, rootDir string) (*Manager, error) {
 	// Ensure the config directory exists
 	dir := filepath.Dir(configPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, configDirMode); err != nil {
 		return nil, fmt.Errorf("failed to create config directory: %w", err)
+	}
+	// MkdirAll leaves an existing directory's mode alone, so tighten
+	// permissions explicitly for installations created before this change.
+	if err := os.Chmod(dir, configDirMode); err != nil {
+		return nil, fmt.Errorf("failed to secure config directory: %w", err)
 	}
 
 	return &Manager{
@@ -74,10 +87,17 @@ func (m *Manager) saveInternal() error {
 		return fmt.Errorf("failed to marshal configuration: %w", err)
 	}
 
-	// Write atomically by writing to a temp file and renaming
+	// Write atomically by writing to a temp file and renaming. The temp file
+	// is created owner-only so the credentials it holds are never briefly
+	// world-readable, and the mode survives the rename onto configPath.
 	tempPath := m.configPath + ".tmp"
-	if err := os.WriteFile(tempPath, data, 0644); err != nil {
+	if err := os.WriteFile(tempPath, data, configFileMode); err != nil {
 		return fmt.Errorf("failed to write configuration: %w", err)
+	}
+	// WriteFile only applies the mode when it creates the file; an existing
+	// temp file from an interrupted save keeps its old mode without this.
+	if err := os.Chmod(tempPath, configFileMode); err != nil {
+		return fmt.Errorf("failed to secure configuration file: %w", err)
 	}
 
 	if err := os.Rename(tempPath, m.configPath); err != nil {
@@ -110,6 +130,8 @@ func (m *Manager) CreateDefaultWithPaths(tempDir, sourcesDir string) error {
 			SourcesDir:            sourcesDir,
 			MaxConcurrentTasks:    3,
 			MaxConcurrentBackends: 4,
+			MaxConcurrentUploads:  4,
+			ExecutionHistoryDays:  90,
 			LogLevel:              "info",
 		},
 	}
