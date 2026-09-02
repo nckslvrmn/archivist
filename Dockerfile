@@ -22,8 +22,11 @@ RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o 
 # Runtime stage
 FROM alpine:latest
 
-# Install runtime dependencies
-RUN apk --no-cache add ca-certificates sqlite tzdata
+# Install runtime dependencies. The upgrade picks up security fixes published
+# since the base image was built (an alpine:latest tag can lag its own package
+# repository by weeks), which is what keeps the image scan clean.
+RUN apk --no-cache upgrade && \
+    apk --no-cache add ca-certificates sqlite tzdata
 
 WORKDIR /app
 
