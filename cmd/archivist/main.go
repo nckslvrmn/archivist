@@ -84,6 +84,14 @@ func main() {
 	}()
 	log.Println("Database initialized")
 
+	// Any execution still marked running belongs to a run that died with the
+	// previous process; close them out before the scheduler starts.
+	if interrupted, err := db.ReconcileRunningExecutions(); err != nil {
+		log.Printf("Warning: failed to reconcile interrupted executions: %v", err)
+	} else if interrupted > 0 {
+		log.Printf("Marked %d interrupted execution(s) as failed", interrupted)
+	}
+
 	// Initialize backup executor
 	log.Println("Initializing executor...")
 	exec := executor.NewExecutor(configMgr, db)

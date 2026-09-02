@@ -3,9 +3,11 @@ package archive
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -26,6 +28,19 @@ type Builder struct {
 	Progress   ProgressCallback
 }
 
+// Result describes a completed archive.
+type Result struct {
+	Path          string
+	Hash          string // "<algo>:<hex>"
+	Size          int64
+	FilesArchived int
+	// Warnings collects entries that were skipped rather than aborting the
+	// whole archive (unreadable files, sockets, dangling symlinks). A backup
+	// that covers 99% of a tree is worth far more than no backup at all, but
+	// the gaps must be reported.
+	Warnings []string
+}
+
 // NewBuilder creates a new archive builder
 func NewBuilder(sourcePath, outputDir string, options models.ArchiveOptions, progress ProgressCallback) *Builder {
 	return &Builder{
@@ -36,40 +51,57 @@ func NewBuilder(sourcePath, outputDir string, options models.ArchiveOptions, pro
 	}
 }
 
-// Build creates the archive and returns the path and hash
-func (b *Builder) Build(taskName string) (archivePath string, hash string, size int64, err error) {
-	// Generate filename from pattern
+// maxWarnings caps the warning list so a pathological tree (e.g. thousands of
+// unreadable files) cannot balloon the execution record.
+const maxWarnings = 100
+
+// Build creates the archive and returns its path, hash and size.
+// The archive is removed if the build fails, so a cancelled or failed run
+// never leaves a partial file behind in the temp directory.
+func (b *Builder) Build(ctx context.Context, taskName string) (*Result, error) {
 	filename, err := GenerateFilename(taskName, b.Options)
 	if err != nil {
-		return "", "", 0, fmt.Errorf("failed to generate filename: %w", err)
+		return nil, fmt.Errorf("failed to generate filename: %w", err)
 	}
 
-	archivePath = filepath.Join(b.OutputPath, filename)
+	// Resolve the source root through any symlinks. The documented workflow
+	// points source_path at a symlink under sources/, and filepath.Walk does
+	// not follow a symlinked root — without this the walk yields the link
+	// itself and the archive is empty or fails outright.
+	root, err := filepath.EvalSymlinks(b.SourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve source path %s: %w", b.SourcePath, err)
+	}
 
-	// Ensure output directory exists
+	archivePath := filepath.Join(b.OutputPath, filename)
+
 	if err := os.MkdirAll(b.OutputPath, 0755); err != nil {
-		return "", "", 0, fmt.Errorf("failed to create output directory: %w", err)
+		return nil, fmt.Errorf("failed to create output directory: %w", err)
 	}
 
 	// Calculate total size for progress reporting
-	totalSize, fileCount, err := b.calculateSize(b.SourcePath)
+	totalSize, _, err := b.calculateSize(ctx, root)
 	if err != nil {
-		return "", "", 0, fmt.Errorf("failed to calculate source size: %w", err)
+		return nil, fmt.Errorf("failed to calculate source size: %w", err)
 	}
 
-	// Create archive based on format
+	var result *Result
 	switch b.Options.Format {
 	case "tar.gz", "tar":
-		hash, size, err = b.createTarGz(archivePath, totalSize, fileCount)
+		result, err = b.createTarGz(ctx, root, archivePath, totalSize)
 	default:
-		return "", "", 0, fmt.Errorf("unsupported archive format: %s", b.Options.Format)
+		return nil, fmt.Errorf("unsupported archive format: %s", b.Options.Format)
 	}
 
 	if err != nil {
-		return "", "", 0, err
+		if removeErr := os.Remove(archivePath); removeErr != nil && !os.IsNotExist(removeErr) {
+			log.Printf("Error removing partial archive %s: %v", archivePath, removeErr)
+		}
+		return nil, err
 	}
 
-	return archivePath, hash, size, nil
+	result.Path = archivePath
+	return result, nil
 }
 
 // GenerateFilename produces an archive filename from the configured pattern.
@@ -123,12 +155,11 @@ func ArchiveExtension(opts models.ArchiveOptions) string {
 	return ".tar.gz"
 }
 
-// createTarGz creates a tar.gz archive
-func (b *Builder) createTarGz(outputPath string, totalSize int64, fileCount int) (hash string, size int64, err error) {
-	// Create output file
+// createTarGz creates a tar.gz archive rooted at root (already symlink-resolved).
+func (b *Builder) createTarGz(ctx context.Context, root, outputPath string, totalSize int64) (*Result, error) {
 	outFile, err := os.Create(outputPath)
 	if err != nil {
-		return "", 0, fmt.Errorf("failed to create archive file: %w", err)
+		return nil, fmt.Errorf("failed to create archive file: %w", err)
 	}
 	fileClosed := false
 	defer func() {
@@ -155,112 +186,233 @@ func (b *Builder) createTarGz(outputPath string, totalSize int64, fileCount int)
 		archiveWriter = gzipWriter
 	}
 
-	// Create tar writer
 	tarWriter := tar.NewWriter(archiveWriter)
 
-	// Track progress
+	result := &Result{}
 	var bytesProcessed int64
-	filesProcessed := 0
 
-	// Walk the source directory
-	err = filepath.Walk(b.SourcePath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+	warn := func(format string, args ...interface{}) {
+		msg := fmt.Sprintf(format, args...)
+		log.Printf("archive: %s", msg)
+		if len(result.Warnings) < maxWarnings {
+			result.Warnings = append(result.Warnings, msg)
+		} else if len(result.Warnings) == maxWarnings {
+			result.Warnings = append(result.Warnings, "additional warnings suppressed")
+		}
+	}
+
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		// An error on the root itself is fatal; anywhere else we skip the
+		// entry and keep going.
+		if walkErr != nil {
+			if path == root {
+				return walkErr
+			}
+			warn("skipping %s: %v", path, walkErr)
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 
-		// Create tar header
-		header, err := tar.FileInfoHeader(info, info.Name())
+		relPath, err := filepath.Rel(root, path)
 		if err != nil {
-			return fmt.Errorf("failed to create tar header: %w", err)
+			warn("skipping %s: %v", path, err)
+			return nil
 		}
+		if relPath == "." {
+			return nil // the root directory itself needs no entry
+		}
+		name := filepath.ToSlash(relPath)
 
-		// Set the name to be relative to the source path
-		relPath, err := filepath.Rel(b.SourcePath, path)
+		// d.Info is an lstat: symlinks are reported as symlinks, not targets.
+		info, err := d.Info()
 		if err != nil {
-			return err
-		}
-		header.Name = relPath
-
-		// Write header
-		if err := tarWriter.WriteHeader(header); err != nil {
-			return fmt.Errorf("failed to write tar header: %w", err)
+			warn("skipping %s: %v", path, err)
+			return nil
 		}
 
-		// If it's a file, write its contents
-		if !info.IsDir() {
-			file, err := os.Open(path)
+		mode := info.Mode()
+		switch {
+		case mode&os.ModeSymlink != 0:
+			target, err := os.Readlink(path)
 			if err != nil {
-				return fmt.Errorf("failed to open file %s: %w", path, err)
+				warn("skipping symlink %s: %v", name, err)
+				return nil
 			}
-			defer func() {
-				if err := file.Close(); err != nil {
-					log.Printf("Error closing file %s: %v", path, err)
-				}
-			}()
-
-			written, err := io.Copy(tarWriter, file)
+			header, err := tar.FileInfoHeader(info, target)
 			if err != nil {
-				return fmt.Errorf("failed to write file %s: %w", path, err)
+				warn("skipping symlink %s: %v", name, err)
+				return nil
+			}
+			header.Name = name
+			if err := tarWriter.WriteHeader(header); err != nil {
+				return fmt.Errorf("failed to write tar header for %s: %w", name, err)
 			}
 
+		case mode.IsDir():
+			header, err := tar.FileInfoHeader(info, "")
+			if err != nil {
+				warn("skipping directory %s: %v", name, err)
+				return nil
+			}
+			header.Name = name + "/"
+			if err := tarWriter.WriteHeader(header); err != nil {
+				return fmt.Errorf("failed to write tar header for %s: %w", name, err)
+			}
+
+		case mode.IsRegular():
+			written, err := b.writeRegularFile(tarWriter, path, name, info, warn)
+			if err != nil {
+				return err
+			}
+			if written < 0 {
+				return nil // skipped, already warned
+			}
 			bytesProcessed += written
-			filesProcessed++
-
-			// Report progress
+			result.FilesArchived++
 			if b.Progress != nil {
-				b.Progress(bytesProcessed, totalSize, relPath)
+				b.Progress(bytesProcessed, totalSize, name)
 			}
+
+		case mode&(os.ModeDevice|os.ModeCharDevice|os.ModeNamedPipe) != 0:
+			// Metadata-only entries: recorded so a restore recreates them,
+			// but never opened — reading a FIFO would block forever.
+			header, err := tar.FileInfoHeader(info, "")
+			if err != nil {
+				warn("skipping special file %s: %v", name, err)
+				return nil
+			}
+			header.Name = name
+			if err := tarWriter.WriteHeader(header); err != nil {
+				return fmt.Errorf("failed to write tar header for %s: %w", name, err)
+			}
+
+		default:
+			// Sockets and anything else tar cannot represent.
+			warn("skipping unsupported file type %s (mode %s)", name, mode)
 		}
 
 		return nil
 	})
 
 	if err != nil {
-		return "", 0, fmt.Errorf("failed to create archive: %w", err)
+		return nil, fmt.Errorf("failed to create archive: %w", err)
 	}
 
 	// Flush writers in order (tar → gzip → file) so the hasher sees every
 	// trailing byte before we read the digest.
 	if err := tarWriter.Close(); err != nil {
-		return "", 0, fmt.Errorf("failed to close tar writer: %w", err)
+		return nil, fmt.Errorf("failed to close tar writer: %w", err)
 	}
 	if gzipWriter != nil {
 		if err := gzipWriter.Close(); err != nil {
-			return "", 0, fmt.Errorf("failed to close gzip writer: %w", err)
+			return nil, fmt.Errorf("failed to close gzip writer: %w", err)
 		}
 	}
 	if err := outFile.Sync(); err != nil {
-		return "", 0, fmt.Errorf("failed to sync archive: %w", err)
+		return nil, fmt.Errorf("failed to sync archive: %w", err)
 	}
 
-	// Get file size
 	stat, err := outFile.Stat()
 	if err != nil {
-		return "", 0, fmt.Errorf("failed to stat archive: %w", err)
+		return nil, fmt.Errorf("failed to stat archive: %w", err)
 	}
 
 	if err := outFile.Close(); err != nil {
-		return "", 0, fmt.Errorf("failed to close archive: %w", err)
+		return nil, fmt.Errorf("failed to close archive: %w", err)
 	}
 	fileClosed = true
 
-	// Calculate hash
-	hashBytes := hasher.Sum(nil)
-	hashString := fmt.Sprintf("sha256:%x", hashBytes)
-
-	return hashString, stat.Size(), nil
+	result.Hash = fmt.Sprintf("sha256:%x", hasher.Sum(nil))
+	result.Size = stat.Size()
+	return result, nil
 }
 
-// calculateSize calculates the total size of files in a directory
-func (b *Builder) calculateSize(path string) (totalSize int64, fileCount int, err error) {
-	err = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
-		if err != nil {
+// writeRegularFile streams one regular file into the archive. It returns the
+// number of bytes written, or -1 if the file was skipped (already warned).
+// Only header.Size bytes are ever written, and a short read is zero-padded:
+// a file that grows or shrinks while being archived must not corrupt the
+// stream for every entry that follows it.
+func (b *Builder) writeRegularFile(tw *tar.Writer, path, name string, info os.FileInfo, warn func(string, ...interface{})) (int64, error) {
+	// Open before writing the header: once a header is written the body is
+	// owed to the stream, so an unreadable file has to be detected first.
+	file, err := os.Open(path)
+	if err != nil {
+		warn("skipping unreadable file %s: %v", name, err)
+		return -1, nil
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			log.Printf("Error closing file %s: %v", path, err)
+		}
+	}()
+
+	header, err := tar.FileInfoHeader(info, "")
+	if err != nil {
+		warn("skipping %s: %v", name, err)
+		return -1, nil
+	}
+	header.Name = name
+
+	if err := tw.WriteHeader(header); err != nil {
+		return 0, fmt.Errorf("failed to write tar header for %s: %w", name, err)
+	}
+
+	written, err := io.CopyN(tw, file, header.Size)
+	if err != nil && err != io.EOF {
+		// The header is already committed, so the body must still be filled
+		// out to header.Size to keep the archive readable.
+		warn("truncated %s after %d/%d bytes: %v", name, written, header.Size, err)
+	}
+	if remaining := header.Size - written; remaining > 0 {
+		if err == nil {
+			warn("file %s shrank during archiving, padding %d bytes", name, remaining)
+		}
+		if _, err := io.CopyN(tw, zeroReader{}, remaining); err != nil {
+			return 0, fmt.Errorf("failed to pad %s: %w", name, err)
+		}
+	}
+
+	return header.Size, nil
+}
+
+// zeroReader is an infinite source of zero bytes used to pad truncated entries.
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
+}
+
+// calculateSize calculates the total size of regular files under root.
+// Unreadable entries are ignored here; the walk in createTarGz reports them.
+func (b *Builder) calculateSize(ctx context.Context, root string) (totalSize int64, fileCount int, err error) {
+	err = filepath.WalkDir(root, func(_ string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !info.IsDir() {
-			totalSize += info.Size()
-			fileCount++
+		if d.IsDir() {
+			return nil
 		}
+		info, err := d.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			return nil
+		}
+		totalSize += info.Size()
+		fileCount++
 		return nil
 	})
 	return

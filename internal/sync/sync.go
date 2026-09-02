@@ -3,7 +3,8 @@ package sync
 import (
 	"context"
 	"fmt"
-	"os"
+	"io/fs"
+	"log"
 	"path/filepath"
 	"strings"
 	"time"
@@ -93,6 +94,11 @@ func (s *Syncer) Sync(ctx context.Context) (*SyncResult, error) {
 	// Step 3: Compare and upload changed/new files
 	s.reportProgress("syncing", 0, len(localFiles), "")
 	for i, localFile := range localFiles {
+		// Stop promptly on cancellation instead of grinding through every
+		// remaining file and collecting one context error per file.
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		s.reportProgress("syncing", i, len(localFiles), localFile.RelativePath)
 
 		remoteFile, exists := remoteFileMap[localFile.RelativePath]
@@ -137,6 +143,9 @@ func (s *Syncer) Sync(ctx context.Context) (*SyncResult, error) {
 		s.reportProgress("deleting", 0, len(remoteFileMap), "")
 		i := 0
 		for _, remoteFile := range remoteFileMap {
+			if err := ctx.Err(); err != nil {
+				return result, err
+			}
 			s.reportProgress("deleting", i, len(remoteFileMap), remoteFile.Path)
 			err := s.Backend.Delete(ctx, remoteFile.Path)
 			if err != nil {
@@ -246,34 +255,60 @@ func (s *Syncer) getUploadReason(local FileInfo, remote backend.BackupInfo) stri
 	return "Modified timestamp newer"
 }
 
-// scanLocalFiles scans the source directory and returns a list of files
+// scanLocalFiles scans the source directory and returns a list of files.
+//
+// The source root is resolved through symlinks first: the documented setup
+// points source_path at a symlink under sources/, and a walk of a symlinked
+// root yields only the link itself. Entries that are not regular files
+// (symlinks, sockets, devices, FIFOs) have no object representation on a
+// storage backend and are skipped rather than failing the sync.
 func (s *Syncer) scanLocalFiles() ([]FileInfo, error) {
+	root, err := filepath.EvalSymlinks(s.SourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve source path %s: %w", s.SourcePath, err)
+	}
+
 	var files []FileInfo
 
-	err := filepath.Walk(s.SourcePath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Skip directories
-		if info.IsDir() {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if path == root {
+				return walkErr
+			}
+			log.Printf("sync: skipping %s: %v", path, walkErr)
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
 			return nil
 		}
 
-		// Get relative path
-		relPath, err := filepath.Rel(s.SourcePath, path)
-		if err != nil {
-			return err
+		if d.IsDir() {
+			return nil
 		}
 
-		fileInfo := FileInfo{
+		info, err := d.Info()
+		if err != nil {
+			log.Printf("sync: skipping %s: %v", path, err)
+			return nil
+		}
+
+		if !info.Mode().IsRegular() {
+			log.Printf("sync: skipping non-regular file %s (mode %s)", path, info.Mode())
+			return nil
+		}
+
+		relPath, err := filepath.Rel(root, path)
+		if err != nil {
+			log.Printf("sync: skipping %s: %v", path, err)
+			return nil
+		}
+
+		files = append(files, FileInfo{
 			Path:         path,
-			RelativePath: relPath,
+			RelativePath: filepath.ToSlash(relPath),
 			Size:         info.Size(),
 			ModTime:      info.ModTime(),
-		}
-
-		files = append(files, fileInfo)
+		})
 		return nil
 	})
 

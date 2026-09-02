@@ -117,14 +117,97 @@ func (m *Manager) CreateDefaultWithPaths(tempDir, sourcesDir string) error {
 	return m.saveInternal()
 }
 
-// Get returns a copy of the current configuration
+// Get returns a deep copy of the current configuration.
+//
+// The copy must be deep: callers (e.g. the API's credential masking) mutate
+// the returned backends in place, and a shallow copy shares the same slice
+// backing array and config maps as the live configuration — masked
+// placeholders would overwrite real credentials in memory and then be
+// persisted by the next Save.
 func (m *Manager) Get() *models.Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// Return a deep copy to prevent external modifications
 	configCopy := *m.config
+	configCopy.Backends = cloneBackends(m.config.Backends)
+	configCopy.Tasks = cloneTasks(m.config.Tasks)
 	return &configCopy
+}
+
+// cloneBackends deep-copies a backend slice, including each Config map.
+func cloneBackends(in []models.Backend) []models.Backend {
+	out := make([]models.Backend, len(in))
+	for i := range in {
+		out[i] = cloneBackend(in[i])
+	}
+	return out
+}
+
+// cloneBackend deep-copies a single backend.
+func cloneBackend(b models.Backend) models.Backend {
+	c := b
+	c.Config = deepCopyMap(b.Config)
+	if b.LastTest != nil {
+		t := *b.LastTest
+		c.LastTest = &t
+	}
+	return c
+}
+
+// cloneTasks deep-copies a task slice.
+func cloneTasks(in []models.Task) []models.Task {
+	out := make([]models.Task, len(in))
+	for i := range in {
+		out[i] = cloneTask(in[i])
+	}
+	return out
+}
+
+// cloneTask deep-copies a single task.
+func cloneTask(t models.Task) models.Task {
+	c := t
+	if t.BackendIDs != nil {
+		c.BackendIDs = make([]string, len(t.BackendIDs))
+		copy(c.BackendIDs, t.BackendIDs)
+	}
+	if t.LastRun != nil {
+		v := *t.LastRun
+		c.LastRun = &v
+	}
+	if t.NextRun != nil {
+		v := *t.NextRun
+		c.NextRun = &v
+	}
+	return c
+}
+
+// deepCopyMap copies a JSON-shaped map (strings, numbers, bools, nested maps
+// and slices) so the caller cannot reach back into the live configuration.
+func deepCopyMap(in map[string]interface{}) map[string]interface{} {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(in))
+	for k, v := range in {
+		out[k] = deepCopyValue(v)
+	}
+	return out
+}
+
+func deepCopyValue(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		return deepCopyMap(val)
+	case []interface{}:
+		out := make([]interface{}, len(val))
+		for i := range val {
+			out[i] = deepCopyValue(val[i])
+		}
+		return out
+	default:
+		// Remaining JSON values (string, float64, bool, nil) are immutable.
+		return v
+	}
 }
 
 // GetSettings returns the current settings
@@ -157,7 +240,7 @@ func (m *Manager) GetBackend(id string) (*models.Backend, error) {
 
 	for i := range m.config.Backends {
 		if m.config.Backends[i].ID == id {
-			backend := m.config.Backends[i]
+			backend := cloneBackend(m.config.Backends[i])
 			return &backend, nil
 		}
 	}
@@ -169,9 +252,7 @@ func (m *Manager) GetBackends() []models.Backend {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	backends := make([]models.Backend, len(m.config.Backends))
-	copy(backends, m.config.Backends)
-	return backends
+	return cloneBackends(m.config.Backends)
 }
 
 // AddBackend adds a new backend
@@ -196,7 +277,9 @@ func (m *Manager) AddBackend(backend *models.Backend) error {
 	backend.CreatedAt = now
 	backend.UpdatedAt = now
 
-	m.config.Backends = append(m.config.Backends, *backend)
+	// Store a deep copy so a caller that keeps hold of the config map cannot
+	// mutate the live configuration behind the lock.
+	m.config.Backends = append(m.config.Backends, cloneBackend(*backend))
 	return m.saveInternal()
 }
 
@@ -211,7 +294,7 @@ func (m *Manager) UpdateBackend(id string, backend *models.Backend) error {
 			backend.ID = id
 			backend.CreatedAt = m.config.Backends[i].CreatedAt
 			backend.UpdatedAt = time.Now()
-			m.config.Backends[i] = *backend
+			m.config.Backends[i] = cloneBackend(*backend)
 			return m.saveInternal()
 		}
 	}
@@ -249,7 +332,7 @@ func (m *Manager) GetTask(id string) (*models.Task, error) {
 
 	for i := range m.config.Tasks {
 		if m.config.Tasks[i].ID == id {
-			task := m.config.Tasks[i]
+			task := cloneTask(m.config.Tasks[i])
 			return &task, nil
 		}
 	}
@@ -261,9 +344,7 @@ func (m *Manager) GetTasks() []models.Task {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	tasks := make([]models.Task, len(m.config.Tasks))
-	copy(tasks, m.config.Tasks)
-	return tasks
+	return cloneTasks(m.config.Tasks)
 }
 
 // AddTask adds a new task
@@ -299,7 +380,7 @@ func (m *Manager) AddTask(task *models.Task) error {
 	task.CreatedAt = now
 	task.UpdatedAt = now
 
-	m.config.Tasks = append(m.config.Tasks, *task)
+	m.config.Tasks = append(m.config.Tasks, cloneTask(*task))
 	return m.saveInternal()
 }
 
@@ -326,7 +407,7 @@ func (m *Manager) UpdateTask(id string, task *models.Task) error {
 				}
 			}
 
-			m.config.Tasks[i] = *task
+			m.config.Tasks[i] = cloneTask(*task)
 			return m.saveInternal()
 		}
 	}

@@ -68,15 +68,6 @@ func (e *Executor) Execute(taskID string) (string, error) {
 		return "", fmt.Errorf("task is disabled")
 	}
 
-	// Check if task is already running
-	e.mu.RLock()
-	if _, exists := e.running[taskID]; exists {
-		e.mu.RUnlock()
-		return "", fmt.Errorf("task is already running")
-	}
-	e.mu.RUnlock()
-
-	// Create execution record
 	executionID := uuid.New().String()
 	execution := &models.Execution{
 		ID:        executionID,
@@ -86,15 +77,18 @@ func (e *Executor) Execute(taskID string) (string, error) {
 		Status:    "running",
 	}
 
-	if err := e.db.CreateExecution(execution); err != nil {
-		return "", fmt.Errorf("failed to create execution record: %w", err)
-	}
-
-	// Create cancellation context
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Track running execution
+	// Claim the task slot: the check and the insert must happen under a
+	// single exclusive lock, otherwise a cron firing and a manual trigger can
+	// both pass the check and run the same task twice against the same temp
+	// file and backends.
 	e.mu.Lock()
+	if _, exists := e.running[taskID]; exists {
+		e.mu.Unlock()
+		cancel()
+		return "", fmt.Errorf("task is already running")
+	}
 	e.running[taskID] = &RunningExecution{
 		ID:        executionID,
 		TaskID:    taskID,
@@ -102,6 +96,16 @@ func (e *Executor) Execute(taskID string) (string, error) {
 		Cancel:    cancel,
 	}
 	e.mu.Unlock()
+
+	// Record the execution only after the slot is claimed, releasing it again
+	// if the insert fails so the task is not wedged as permanently running.
+	if err := e.db.CreateExecution(execution); err != nil {
+		e.mu.Lock()
+		delete(e.running, taskID)
+		e.mu.Unlock()
+		cancel()
+		return "", fmt.Errorf("failed to create execution record: %w", err)
+	}
 
 	// Broadcast execution started
 	e.broadcastEvent(models.ProgressEvent{
@@ -297,13 +301,28 @@ func (e *Executor) scanSourceDirectory(sourcePath string) (*models.FilesSummary,
 
 	var allFiles []models.FileDetail
 
-	err := filepath.Walk(sourcePath, func(path string, info os.FileInfo, err error) error {
+	// Resolve the root through symlinks so a source that is itself a symlink
+	// (the documented sources/ layout) is scanned rather than reported as a
+	// single unreadable entry.
+	root, err := filepath.EvalSymlinks(sourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve source path %s: %w", sourcePath, err)
+	}
+	sourcePath = root
+
+	err = filepath.Walk(sourcePath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return err
+			// Report what we can rather than aborting the whole preview.
+			log.Printf("dry-run: skipping %s: %v", path, err)
+			return nil
 		}
 
 		if info.IsDir() {
 			summary.TotalDirs++
+			return nil
+		}
+
+		if !info.Mode().IsRegular() {
 			return nil
 		}
 
@@ -451,7 +470,7 @@ func (e *Executor) runExecution(ctx context.Context, task *models.Task, executio
 				Data: models.ArchiveProgress{
 					ExecutionID:     execution.ID,
 					Phase:           "creating_archive",
-					ProgressPercent: float64(current) / float64(total) * 100,
+					ProgressPercent: percent(current, total),
 					CurrentFile:     file,
 					BytesProcessed:  current,
 					BytesTotal:      total,
@@ -460,10 +479,16 @@ func (e *Executor) runExecution(ctx context.Context, task *models.Task, executio
 		},
 	)
 
-	archivePath, hash, size, err := builder.Build(task.Name)
+	buildResult, err := builder.Build(ctx, task.Name)
 	if err != nil {
-		execution.Status = "failed"
-		execution.ErrorMessage = fmt.Sprintf("Failed to create archive: %v", err)
+		// A cancelled build is a user action, not a failure.
+		if ctx.Err() != nil {
+			execution.Status = "cancelled"
+			execution.ErrorMessage = "Execution cancelled"
+		} else {
+			execution.Status = "failed"
+			execution.ErrorMessage = fmt.Sprintf("Failed to create archive: %v", err)
+		}
 		now := time.Now()
 		execution.CompletedAt = &now
 		execution.DurationMs = time.Since(startTime).Milliseconds()
@@ -474,9 +499,15 @@ func (e *Executor) runExecution(ctx context.Context, task *models.Task, executio
 		return err
 	}
 
+	archivePath := buildResult.Path
+
 	// Update execution with archive info
-	execution.ArchiveSize = size
-	execution.ArchiveHash = hash
+	execution.ArchiveSize = buildResult.Size
+	execution.ArchiveHash = buildResult.Hash
+
+	if len(buildResult.Warnings) > 0 {
+		log.Printf("Archive for task %s completed with %d warning(s)", task.Name, len(buildResult.Warnings))
+	}
 
 	// Clean up archive on completion
 	defer func() {
@@ -505,7 +536,11 @@ func (e *Executor) runExecution(ctx context.Context, task *models.Task, executio
 	execution.BackendResults = backendResults
 
 	// Determine overall status
-	if len(uploadErrors) == len(task.BackendIDs) {
+	if ctx.Err() != nil {
+		// Cancellation is a user action, not a backup failure.
+		execution.Status = "cancelled"
+		execution.ErrorMessage = "Execution cancelled"
+	} else if len(uploadErrors) == len(task.BackendIDs) {
 		// All uploads failed
 		execution.Status = "failed"
 		// Include detailed error messages
@@ -540,9 +575,14 @@ func (e *Executor) runExecution(ctx context.Context, task *models.Task, executio
 		log.Printf("Error updating task schedule: %v", err)
 	}
 
-	// Apply retention policy if configured
-	if task.RetentionPolicy.KeepLast > 0 {
-		e.applyRetentionPolicy(ctx, task, backendResults)
+	// Apply retention policy if configured. Retention deletes remote data, so
+	// it runs on its own bounded context: never on a context that has just
+	// been cancelled (which would delete nothing or, worse, stop halfway),
+	// and never unbounded.
+	if task.RetentionPolicy.KeepLast > 0 && ctx.Err() == nil {
+		retentionCtx, cancelRetention := context.WithTimeout(context.Background(), retentionTimeout)
+		e.applyRetentionPolicy(retentionCtx, task, backendResults)
+		cancelRetention()
 	}
 
 	// Broadcast completion
@@ -590,7 +630,11 @@ func (e *Executor) runSyncExecution(ctx context.Context, task *models.Task, exec
 	execution.ArchiveSize = totalBytesUploaded // Use total synced size
 
 	// Determine overall status
-	if len(syncErrors) == len(task.BackendIDs) {
+	if ctx.Err() != nil {
+		// Cancellation is a user action, not a backup failure.
+		execution.Status = "cancelled"
+		execution.ErrorMessage = "Execution cancelled"
+	} else if len(syncErrors) == len(task.BackendIDs) {
 		// All syncs failed
 		execution.Status = "failed"
 		errorDetails := make([]string, len(syncErrors))
@@ -798,7 +842,7 @@ func (e *Executor) uploadToBackend(ctx context.Context, backendID string, task *
 				ExecutionID:     execution.ID,
 				BackendID:       backendID,
 				BackendName:     backendCfg.Name,
-				ProgressPercent: float64(uploaded) / float64(total) * 100,
+				ProgressPercent: percent(uploaded, total),
 				BytesUploaded:   uploaded,
 				BytesTotal:      total,
 			},
@@ -880,14 +924,17 @@ func (e *Executor) priorArchiveMatches(ctx context.Context, b backend.StorageBac
 		return "", false, nil
 	}
 
-	// List a wide enough prefix to catch all prior archives for this task.
-	files, err := b.List(ctx, "")
+	// List server-side under this task's filename prefix. Listing the whole
+	// bucket and filtering locally costs a full enumeration (and a per-request
+	// bill) on every upload.
+	taskPrefix := archive.SanitizeTaskName(task.Name) + "_"
+	ext := archive.ArchiveExtension(task.ArchiveOptions)
+
+	files, err := b.List(ctx, taskPrefix)
 	if err != nil {
 		return "", false, err
 	}
 
-	taskPrefix := archive.SanitizeTaskName(task.Name) + "_"
-	ext := archive.ArchiveExtension(task.ArchiveOptions)
 	var candidates []backend.BackupInfo
 	for _, f := range files {
 		fileName := filepath.Base(f.Path)
@@ -910,6 +957,19 @@ func (e *Executor) priorArchiveMatches(ctx context.Context, b backend.StorageBac
 		return "", false, err
 	}
 	return newest.Path, matched, nil
+}
+
+// retentionTimeout bounds the post-backup retention sweep.
+const retentionTimeout = 10 * time.Minute
+
+// percent computes a progress percentage, returning 0 rather than NaN when
+// the total is unknown. NaN cannot be marshalled to JSON and would kill the
+// WebSocket broadcast for every connected client.
+func percent(current, total int64) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(current) / float64(total) * 100
 }
 
 // splitArchiveHash parses the "<algo>:<hex>" form produced by archive.Builder.
@@ -939,15 +999,13 @@ func (e *Executor) applyRetentionPolicy(ctx context.Context, task *models.Task, 
 			continue
 		}
 
-		// List backups for this task
-		prefix := result.RemotePath
-		// Get the directory part for listing similar files
-		prefix = filepath.Dir(prefix)
-		if prefix == "." {
-			prefix = ""
-		}
+		// List backups for this task, narrowing server-side to the filenames
+		// this task produces. The client-side filter below still applies:
+		// some backends (Google Drive) can only do substring matching.
+		taskPrefix := archive.SanitizeTaskName(task.Name) + "_"
+		ext := archive.ArchiveExtension(task.ArchiveOptions)
 
-		allFiles, err := backendInstance.List(ctx, prefix)
+		allFiles, err := backendInstance.List(ctx, taskPrefix)
 		if err != nil {
 			log.Printf("Failed to list backups for retention: %v", err)
 			if closeErr := backendInstance.Close(); closeErr != nil {
@@ -958,8 +1016,6 @@ func (e *Executor) applyRetentionPolicy(ctx context.Context, task *models.Task, 
 
 		// Filter to only include files produced by this task. Filenames
 		// follow archive.GenerateFilename: <sanitized-task>_<timestamp><ext>.
-		taskPrefix := archive.SanitizeTaskName(task.Name) + "_"
-		ext := archive.ArchiveExtension(task.ArchiveOptions)
 		var backups []backend.BackupInfo
 		for _, file := range allFiles {
 			fileName := filepath.Base(file.Path)

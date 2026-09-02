@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -15,12 +16,30 @@ type Database struct {
 	db *sql.DB
 }
 
+// busyTimeout is how long SQLite waits for a lock before returning
+// SQLITE_BUSY. Per-backend goroutines write upload results concurrently, so
+// without this the default is an immediate "database is locked" error.
+const busyTimeout = 5 * time.Second
+
 // NewDatabase creates a new database connection
 func NewDatabase(path string) (*Database, error) {
-	db, err := sql.Open("sqlite3", path)
+	// WAL lets readers (dashboard, execution list) run while a backup writes.
+	// _busy_timeout retries instead of failing on contention, and foreign keys
+	// are off by default in SQLite, which made the backend_uploads FK inert.
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=%d&_foreign_keys=on&_synchronous=NORMAL",
+		path, busyTimeout.Milliseconds())
+
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
+
+	// SQLite allows one writer at a time; WAL plus _busy_timeout absorbs the
+	// contention. The pool is kept small but never at 1 — a single connection
+	// deadlocks the moment any code path queries while holding an open cursor.
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
+	db.SetConnMaxLifetime(0)
 
 	// Test connection
 	if err := db.Ping(); err != nil {
@@ -267,17 +286,95 @@ func (d *Database) ListExecutions(taskID string, status string, limit, offset in
 			exec.DurationMs = durationMs.Int64
 		}
 
-		// Load backend results
-		backendResults, loadErr := d.getBackendUploads(exec.ID)
-		if loadErr != nil {
-			log.Printf("failed to load backend results for execution %s: %v", exec.ID, loadErr)
-		}
-		exec.BackendResults = backendResults
-
 		executions = append(executions, exec)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
-	return executions, rows.Err()
+	// Backend results are loaded after the cursor above is drained, in one
+	// query rather than one per row. Querying inside the loop both issues N+1
+	// round trips and needs a second pooled connection, which deadlocks
+	// against SQLite's single-writer connection limit.
+	if err := d.attachBackendUploads(executions); err != nil {
+		log.Printf("failed to load backend results: %v", err)
+	}
+
+	return executions, nil
+}
+
+// attachBackendUploads loads the upload rows for every execution in one query
+// and attaches them in place.
+func (d *Database) attachBackendUploads(executions []models.Execution) error {
+	if len(executions) == 0 {
+		return nil
+	}
+
+	placeholders := make([]string, len(executions))
+	args := make([]interface{}, len(executions))
+	index := make(map[string]int, len(executions))
+	for i := range executions {
+		placeholders[i] = "?"
+		args[i] = executions[i].ID
+		index[executions[i].ID] = i
+		executions[i].BackendResults = nil
+	}
+
+	query := `
+		SELECT execution_id, backend_id, backend_name, status, uploaded_at, size, remote_path, error_message
+		FROM backend_uploads WHERE execution_id IN (` + strings.Join(placeholders, ",") + `)
+		ORDER BY id
+	`
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.Printf("Error closing rows: %v", err)
+		}
+	}()
+
+	for rows.Next() {
+		var executionID string
+		var result models.BackendResult
+		var uploadedAt sql.NullTime
+		var size sql.NullInt64
+		var remotePath, errorMessage sql.NullString
+
+		if err := rows.Scan(
+			&executionID,
+			&result.BackendID,
+			&result.BackendName,
+			&result.Status,
+			&uploadedAt,
+			&size,
+			&remotePath,
+			&errorMessage,
+		); err != nil {
+			return err
+		}
+
+		if uploadedAt.Valid {
+			result.UploadedAt = &uploadedAt.Time
+		}
+		if size.Valid {
+			result.Size = size.Int64
+		}
+		if remotePath.Valid {
+			result.RemotePath = remotePath.String
+		}
+		if errorMessage.Valid {
+			result.ErrorMessage = errorMessage.String
+		}
+
+		if i, ok := index[executionID]; ok {
+			executions[i].BackendResults = append(executions[i].BackendResults, result)
+		}
+	}
+
+	return rows.Err()
 }
 
 // AddBackendUpload records a backend upload result
@@ -455,6 +552,32 @@ func (d *Database) GetExecutionStats() (*models.ExecutionsStats, error) {
 	}
 
 	return &stats, nil
+}
+
+// ReconcileRunningExecutions marks executions still flagged as running as
+// failed. Nothing survives a process restart, so any row left in "running"
+// belongs to a run that was interrupted — without this they stay running
+// forever and permanently skew the dashboard's counts.
+func (d *Database) ReconcileRunningExecutions() (int, error) {
+	query := `
+		UPDATE executions SET
+			status = 'failed',
+			completed_at = COALESCE(completed_at, ?),
+			error_message = COALESCE(NULLIF(error_message, ''), 'Execution interrupted: archivist restarted'),
+			duration_ms = COALESCE(duration_ms, 0)
+		WHERE status = 'running'
+	`
+
+	res, err := d.db.Exec(query, time.Now())
+	if err != nil {
+		return 0, fmt.Errorf("failed to reconcile running executions: %w", err)
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, nil // the update succeeded; the count is not worth an error
+	}
+	return int(affected), nil
 }
 
 // ClearHistory deletes all execution records
