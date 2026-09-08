@@ -4,22 +4,20 @@ services:
     container_name: archivist
     restart: always
     ports:
-      - "8080"
+    - "8080"
     environment:
-      - TZ=America/New_York
-      - PUID=911
-      - PGID=911
+    - TZ=America/New_York
+    - PUID=911
+    - PGID=911
     volumes:
-      - /mnt/data/archivist:/data
-      - /mnt/data:/data/sources
+    - /mnt/data/archivist:/data
+    - /mnt/data:/data/sources
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.archivist.rule=Host(`archivist.slvr.io`)"
-      - "traefik.http.routers.archivist.entrypoints=websecure"
-      - "traefik.http.middlewares.archivist-internal-allowlist.ipallowlist.sourcerange=192.168.1.0/24, 192.168.2.0/24"
-      - "traefik.http.routers.archivist.middlewares=archivist-internal-allowlist"
+    - "traefik.enable=true"
+    - "traefik.http.routers.archivist.rule=Host(`archivist.slvr.io`)"
+    - "traefik.http.routers.archivist.entrypoints=internal"
     networks:
-      - traefik
+    - traefik
 
 networks:
   traefik:
