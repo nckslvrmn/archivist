@@ -8,8 +8,8 @@ services:
     - PUID=911
     - PGID=911
     volumes:
-    - /mnt/data/archivist:/data
-    - /mnt/data:/data/sources
+    - /app/archivist:/data
+    - /app:/data/sources
     labels:
     - "traefik.enable=true"
     - "traefik.http.routers.archivist.rule=Host(`archivist.slvr.io`)"
